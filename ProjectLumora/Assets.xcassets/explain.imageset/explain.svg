@@ -1,0 +1,16 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+
+  <!-- Center node (shifted further left) -->
+  <circle cx="9" cy="12" r="2" fill="#4F6D7A"/>
+
+  <!-- Right nodes (also slightly pulled in) -->
+  <circle cx="15" cy="7" r="2" fill="#4F6D7A" opacity="0.55"/>
+  <circle cx="15" cy="12" r="2" fill="#4F6D7A" opacity="0.55"/>
+  <circle cx="15" cy="17" r="2" fill="#4F6D7A" opacity="0.55"/>
+
+  <!-- Connections -->
+  <path d="M10 12 L15 7" stroke="#4F6D7A" stroke-width="2" stroke-linecap="round"/>
+  <path d="M10 12 L15 12" stroke="#4F6D7A" stroke-width="2" stroke-linecap="round"/>
+  <path d="M10 12 L15 17" stroke="#4F6D7A" stroke-width="2" stroke-linecap="round"/>
+
+</svg>

@@ -1,0 +1,21 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <linearGradient id="askGrad" x1="6" y1="12" x2="18" y2="12" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F6D7A"/>
+      <stop offset="100%" stop-color="#6F8F88"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Shifted slightly right -->
+  <circle cx="7" cy="12" r="2" fill="url(#askGrad)"/>
+
+  <!-- Waves (pulled inward for balance) -->
+  <path d="M10 8 Q12 12 10 16"
+        stroke="url(#askGrad)" stroke-width="2.1" stroke-linecap="round"/>
+
+  <path d="M13 7 Q16 12 13 17"
+        stroke="url(#askGrad)" stroke-width="2" stroke-linecap="round" opacity="0.75"/>
+
+  <path d="M16 6 Q19 12 16 18"
+        stroke="url(#askGrad)" stroke-width="1.8" stroke-linecap="round" opacity="0.55"/>
+</svg>

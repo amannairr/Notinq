@@ -25,8 +25,11 @@ struct ProjectLumoraApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MainContainerView()
+                .background(WindowAccessor())
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact)
         .modelContainer(sharedModelContainer)
     }
 }

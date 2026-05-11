@@ -6,6 +6,24 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462872FA64859009B2513 /* WhisperBridge.mm */; };
+		07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B462892FA648A8009B2513 /* AudioStreamManager.swift */; };
+		07B4628C2FA648A8009B2513 /* TranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B4628B2FA648A8009B2513 /* TranscriptionEngine.swift */; };
+		07B4628E2FA648A8009B2513 /* EditorInsertionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B4628D2FA648A8009B2513 /* EditorInsertionManager.swift */; };
+		07B462902FA648A8009B2513 /* WhisperManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B4628F2FA648A8009B2513 /* WhisperManager.swift */; };
+		07B462A42FA77A75009B2513 /* libggml-base.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462A32FA77A75009B2513 /* libggml-base.a */; };
+		07B462A62FA77A99009B2513 /* libwhisper.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462A52FA77A99009B2513 /* libwhisper.a */; };
+		07B462A82FA77AD7009B2513 /* libggml.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462A72FA77AD7009B2513 /* libggml.a */; };
+		07B462AA2FA77AF5009B2513 /* libggml-cpu.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462A92FA77AF5009B2513 /* libggml-cpu.a */; };
+		07B462AC2FA77B6E009B2513 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AB2FA77B6E009B2513 /* Metal.framework */; };
+		07B462AE2FA77B79009B2513 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AD2FA77B79009B2513 /* MetalKit.framework */; };
+		07B462B02FA77B87009B2513 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AF2FA77B87009B2513 /* Accelerate.framework */; };
+		07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */ = {isa = PBXBuildFile; fileRef = 07B462B12FA77BDB009B2513 /* ggml-base.en.bin */; };
+		07B462BB2FA7A2F6009B2513 /* LlamaBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */; };
+		8A1D01012FB1000200AA1001 /* libllama.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A1D01022FB1000200AA1001 /* libllama.a */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		07279D9B2F8AA40400A1D363 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,11 +45,42 @@
 		07279D8B2F8AA40300A1D363 /* ProjectLumora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ProjectLumora.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279D9A2F8AA40400A1D363 /* ProjectLumoraTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProjectLumoraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279DA42F8AA40400A1D363 /* ProjectLumoraUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProjectLumoraUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		07B462862FA64859009B2513 /* WhisperBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WhisperBridge.h; sourceTree = "<group>"; };
+		07B462872FA64859009B2513 /* WhisperBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WhisperBridge.mm; sourceTree = "<group>"; };
+		07B462892FA648A8009B2513 /* AudioStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamManager.swift; sourceTree = "<group>"; };
+		07B4628B2FA648A8009B2513 /* TranscriptionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionEngine.swift; sourceTree = "<group>"; };
+		07B4628D2FA648A8009B2513 /* EditorInsertionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorInsertionManager.swift; sourceTree = "<group>"; };
+		07B4628F2FA648A8009B2513 /* WhisperManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperManager.swift; sourceTree = "<group>"; };
+		07B462A32FA77A75009B2513 /* libggml-base.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = "libggml-base.a"; path = "ThirdParty/llama-libs/libggml-base.a"; sourceTree = "<group>"; };
+		07B462A52FA77A99009B2513 /* libwhisper.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libwhisper.a; path = ThirdParty/whisper.cpp/build/src/libwhisper.a; sourceTree = "<group>"; };
+		07B462A72FA77AD7009B2513 /* libggml.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libggml.a; path = "ThirdParty/llama-libs/libggml.a"; sourceTree = "<group>"; };
+		07B462A92FA77AF5009B2513 /* libggml-cpu.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = "libggml-cpu.a"; path = "ThirdParty/llama-libs/libggml-cpu.a"; sourceTree = "<group>"; };
+		07B462AB2FA77B6E009B2513 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		07B462AD2FA77B79009B2513 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		07B462AF2FA77B87009B2513 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		07B462B12FA77BDB009B2513 /* ggml-base.en.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = "ggml-base.en.bin"; path = "../../models/ggml-base.en.bin"; sourceTree = "<group>"; };
+		07B462B92FA7A2F6009B2513 /* LlamaBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LlamaBridge.h; sourceTree = "<group>"; };
+		07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LlamaBridge.mm; sourceTree = "<group>"; };
+		8A1D01022FB1000200AA1001 /* libllama.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libllama.a; path = "ThirdParty/llama-libs/libllama.a"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		07B462752FA4F9BE009B2513 /* Exceptions for "ProjectLumora" folder in "ProjectLumora" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				Untitled.swift,
+			);
+			target = 07279D8A2F8AA40300A1D363 /* ProjectLumora */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		07279D8D2F8AA40300A1D363 /* ProjectLumora */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				07B462752FA4F9BE009B2513 /* Exceptions for "ProjectLumora" folder in "ProjectLumora" target */,
+			);
 			path = ProjectLumora;
 			sourceTree = "<group>";
 		};
@@ -52,6 +101,14 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				07B462B02FA77B87009B2513 /* Accelerate.framework in Frameworks */,
+				07B462AE2FA77B79009B2513 /* MetalKit.framework in Frameworks */,
+				07B462AC2FA77B6E009B2513 /* Metal.framework in Frameworks */,
+				07B462AA2FA77AF5009B2513 /* libggml-cpu.a in Frameworks */,
+				8A1D01012FB1000200AA1001 /* libllama.a in Frameworks */,
+				07B462A82FA77AD7009B2513 /* libggml.a in Frameworks */,
+				07B462A62FA77A99009B2513 /* libwhisper.a in Frameworks */,
+				07B462A42FA77A75009B2513 /* libggml-base.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,10 +132,21 @@
 		07279D822F8AA40300A1D363 = {
 			isa = PBXGroup;
 			children = (
-				07279D8D2F8AA40300A1D363 /* ProjectLumora */,
+				07B462B12FA77BDB009B2513 /* ggml-base.en.bin */,
+				07B462932FA760E6009B2513 /* Models */,
 				07279D9D2F8AA40400A1D363 /* ProjectLumoraTests */,
 				07279DA72F8AA40400A1D363 /* ProjectLumoraUITests */,
 				07279D8C2F8AA40300A1D363 /* Products */,
+				07B462862FA64859009B2513 /* WhisperBridge.h */,
+				07B462872FA64859009B2513 /* WhisperBridge.mm */,
+				07B462892FA648A8009B2513 /* AudioStreamManager.swift */,
+				07B4628F2FA648A8009B2513 /* WhisperManager.swift */,
+				07B4628B2FA648A8009B2513 /* TranscriptionEngine.swift */,
+				07B4628D2FA648A8009B2513 /* EditorInsertionManager.swift */,
+				07279D8D2F8AA40300A1D363 /* ProjectLumora */,
+				07B462A22FA77A75009B2513 /* Frameworks */,
+				07B462B92FA7A2F6009B2513 /* LlamaBridge.h */,
+				07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */,
 			);
 			sourceTree = "<group>";
 		};
@@ -90,6 +158,28 @@
 				07279DA42F8AA40400A1D363 /* ProjectLumoraUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		07B462932FA760E6009B2513 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		07B462A22FA77A75009B2513 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				07B462AF2FA77B87009B2513 /* Accelerate.framework */,
+				07B462AD2FA77B79009B2513 /* MetalKit.framework */,
+				07B462AB2FA77B6E009B2513 /* Metal.framework */,
+				07B462A92FA77AF5009B2513 /* libggml-cpu.a */,
+				8A1D01022FB1000200AA1001 /* libllama.a */,
+				07B462A72FA77AD7009B2513 /* libggml.a */,
+				07B462A52FA77A99009B2513 /* libwhisper.a */,
+				07B462A32FA77A75009B2513 /* libggml-base.a */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -186,7 +276,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "ProjectLumora" */;
+			buildConfigurationList = 07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notinq" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -212,6 +302,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -236,6 +327,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				07B462BB2FA7A2F6009B2513 /* LlamaBridge.mm in Sources */,
+				07B4628E2FA648A8009B2513 /* EditorInsertionManager.swift in Sources */,
+				07B4628C2FA648A8009B2513 /* TranscriptionEngine.swift in Sources */,
+				07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */,
+				07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */,
+				07B462902FA648A8009B2513 /* WhisperManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -400,15 +497,43 @@
 				DEVELOPMENT_TEAM = DV9DU7XP4B;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				"HEADER_SEARCH_PATHS[arch=*]" = (
+					"$(PROJECT_DIR)/ThirdParty/whisper.cpp\n$(PROJECT_DIR)/ThirdParty/whisper.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp\n$(PROJECT_DIR)/ThirdParty/llama.cpp/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src",
+				);
+				INFOPLIST_FILE = ProjectLumora/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/ThirdParty/llama-libs",
+					"$(PROJECT_DIR)/ThirdParty/whisper.cpp/build/src",
+				);
 				MARKETING_VERSION = 1.0;
+				"MTL_HEADER_SEARCH_PATHS[sdk=*]" = "$(PROJECT_DIR)/ThirdParty/whisper.cpp\n$(PROJECT_DIR)/ThirdParty/whisper.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp\n$(PROJECT_DIR)/ThirdParty/llama.cpp/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src/ggml-metal";
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-DLLAMA_BRIDGE_FORCE_ENABLE=1",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(inherited)",
+					"-DLLAMA_BRIDGE_FORCE_ENABLE=1",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumora;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -432,15 +557,43 @@
 				DEVELOPMENT_TEAM = DV9DU7XP4B;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				"HEADER_SEARCH_PATHS[arch=*]" = (
+					"$(PROJECT_DIR)/ThirdParty/whisper.cpp\n$(PROJECT_DIR)/ThirdParty/whisper.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp\n$(PROJECT_DIR)/ThirdParty/llama.cpp/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src",
+				);
+				INFOPLIST_FILE = ProjectLumora/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/ThirdParty/llama-libs",
+					"$(PROJECT_DIR)/ThirdParty/whisper.cpp/build/src",
+				);
 				MARKETING_VERSION = 1.0;
+				"MTL_HEADER_SEARCH_PATHS[sdk=*]" = "$(PROJECT_DIR)/ThirdParty/whisper.cpp\n$(PROJECT_DIR)/ThirdParty/whisper.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp\n$(PROJECT_DIR)/ThirdParty/llama.cpp/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src/ggml-metal";
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-DLLAMA_BRIDGE_FORCE_ENABLE=1",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(inherited)",
+					"-DLLAMA_BRIDGE_FORCE_ENABLE=1",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumora;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -536,7 +689,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "ProjectLumora" */ = {
+		07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notinq" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07279DAC2F8AA40400A1D363 /* Debug */,
