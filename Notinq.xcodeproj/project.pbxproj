@@ -276,7 +276,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notinq" */;
+			buildConfigurationList = 07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notin" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -689,7 +689,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notinq" */ = {
+		07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notin" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07279DAC2F8AA40400A1D363 /* Debug */,
