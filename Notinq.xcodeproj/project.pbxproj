@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */; };
 		07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462872FA64859009B2513 /* WhisperBridge.mm */; };
 		07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B462892FA648A8009B2513 /* AudioStreamManager.swift */; };
 		07B4628C2FA648A8009B2513 /* TranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B4628B2FA648A8009B2513 /* TranscriptionEngine.swift */; };
@@ -30,21 +31,22 @@
 			containerPortal = 07279D832F8AA40300A1D363 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 07279D8A2F8AA40300A1D363;
-			remoteInfo = ProjectLumora;
+			remoteInfo = Notinq;
 		};
 		07279DA52F8AA40400A1D363 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 07279D832F8AA40300A1D363 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 07279D8A2F8AA40300A1D363;
-			remoteInfo = ProjectLumora;
+			remoteInfo = Notinq;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		07279D8B2F8AA40300A1D363 /* ProjectLumora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ProjectLumora.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		07279D9A2F8AA40400A1D363 /* ProjectLumoraTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProjectLumoraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		07279DA42F8AA40400A1D363 /* ProjectLumoraUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProjectLumoraUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		07279D8B2F8AA40300A1D363 /* Notinq.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notinq.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		07279D9A2F8AA40400A1D363 /* NotinqTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyResponseParser.swift; sourceTree = "<group>"; };
 		07B462862FA64859009B2513 /* WhisperBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WhisperBridge.h; sourceTree = "<group>"; };
 		07B462872FA64859009B2513 /* WhisperBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WhisperBridge.mm; sourceTree = "<group>"; };
 		07B462892FA648A8009B2513 /* AudioStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamManager.swift; sourceTree = "<group>"; };
@@ -58,40 +60,40 @@
 		07B462AB2FA77B6E009B2513 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		07B462AD2FA77B79009B2513 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		07B462AF2FA77B87009B2513 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
-		07B462B12FA77BDB009B2513 /* ggml-base.en.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = "ggml-base.en.bin"; path = "../../models/ggml-base.en.bin"; sourceTree = "<group>"; };
+		07B462B12FA77BDB009B2513 /* ggml-base.en.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = "ggml-base.en.bin"; path = "../../../models/ggml-base.en.bin"; sourceTree = "<group>"; };
 		07B462B92FA7A2F6009B2513 /* LlamaBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LlamaBridge.h; sourceTree = "<group>"; };
 		07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LlamaBridge.mm; sourceTree = "<group>"; };
 		8A1D01022FB1000200AA1001 /* libllama.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libllama.a; path = "ThirdParty/llama-libs/libllama.a"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		07B462752FA4F9BE009B2513 /* Exceptions for "ProjectLumora" folder in "ProjectLumora" target */ = {
+		07B462752FA4F9BE009B2513 /* Exceptions for "Notinq" folder in "Notinq" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 				Untitled.swift,
 			);
-			target = 07279D8A2F8AA40300A1D363 /* ProjectLumora */;
+			target = 07279D8A2F8AA40300A1D363 /* Notinq */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		07279D8D2F8AA40300A1D363 /* ProjectLumora */ = {
+		07279D8D2F8AA40300A1D363 /* Notinq */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				07B462752FA4F9BE009B2513 /* Exceptions for "ProjectLumora" folder in "ProjectLumora" target */,
+				07B462752FA4F9BE009B2513 /* Exceptions for "Notinq" folder in "Notinq" target */,
 			);
-			path = ProjectLumora;
+			path = Notinq;
 			sourceTree = "<group>";
 		};
-		07279D9D2F8AA40400A1D363 /* ProjectLumoraTests */ = {
+		07279D9D2F8AA40400A1D363 /* NotinqTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ProjectLumoraTests;
+			path = NotinqTests;
 			sourceTree = "<group>";
 		};
-		07279DA72F8AA40400A1D363 /* ProjectLumoraUITests */ = {
+		07279DA72F8AA40400A1D363 /* NotinqUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ProjectLumoraUITests;
+			path = NotinqUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -132,10 +134,9 @@
 		07279D822F8AA40300A1D363 = {
 			isa = PBXGroup;
 			children = (
-				07B462B12FA77BDB009B2513 /* ggml-base.en.bin */,
 				07B462932FA760E6009B2513 /* Models */,
-				07279D9D2F8AA40400A1D363 /* ProjectLumoraTests */,
-				07279DA72F8AA40400A1D363 /* ProjectLumoraUITests */,
+				07279D9D2F8AA40400A1D363 /* NotinqTests */,
+				07279DA72F8AA40400A1D363 /* NotinqUITests */,
 				07279D8C2F8AA40300A1D363 /* Products */,
 				07B462862FA64859009B2513 /* WhisperBridge.h */,
 				07B462872FA64859009B2513 /* WhisperBridge.mm */,
@@ -143,19 +144,20 @@
 				07B4628F2FA648A8009B2513 /* WhisperManager.swift */,
 				07B4628B2FA648A8009B2513 /* TranscriptionEngine.swift */,
 				07B4628D2FA648A8009B2513 /* EditorInsertionManager.swift */,
-				07279D8D2F8AA40300A1D363 /* ProjectLumora */,
+				07279D8D2F8AA40300A1D363 /* Notinq */,
 				07B462A22FA77A75009B2513 /* Frameworks */,
 				07B462B92FA7A2F6009B2513 /* LlamaBridge.h */,
 				07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */,
+				07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */,
 			);
 			sourceTree = "<group>";
 		};
 		07279D8C2F8AA40300A1D363 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				07279D8B2F8AA40300A1D363 /* ProjectLumora.app */,
-				07279D9A2F8AA40400A1D363 /* ProjectLumoraTests.xctest */,
-				07279DA42F8AA40400A1D363 /* ProjectLumoraUITests.xctest */,
+				07279D8B2F8AA40300A1D363 /* Notinq.app */,
+				07279D9A2F8AA40400A1D363 /* NotinqTests.xctest */,
+				07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -163,6 +165,7 @@
 		07B462932FA760E6009B2513 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				07B462B12FA77BDB009B2513 /* ggml-base.en.bin */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -185,9 +188,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		07279D8A2F8AA40300A1D363 /* ProjectLumora */ = {
+		07279D8A2F8AA40300A1D363 /* Notinq */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 07279DAE2F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "ProjectLumora" */;
+			buildConfigurationList = 07279DAE2F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "Notinq" */;
 			buildPhases = (
 				07279D872F8AA40300A1D363 /* Sources */,
 				07279D882F8AA40300A1D363 /* Frameworks */,
@@ -198,18 +201,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				07279D8D2F8AA40300A1D363 /* ProjectLumora */,
+				07279D8D2F8AA40300A1D363 /* Notinq */,
 			);
-			name = ProjectLumora;
+			name = Notinq;
 			packageProductDependencies = (
 			);
-			productName = ProjectLumora;
-			productReference = 07279D8B2F8AA40300A1D363 /* ProjectLumora.app */;
+			productName = Notinq;
+			productReference = 07279D8B2F8AA40300A1D363 /* Notinq.app */;
 			productType = "com.apple.product-type.application";
 		};
-		07279D992F8AA40400A1D363 /* ProjectLumoraTests */ = {
+		07279D992F8AA40400A1D363 /* NotinqTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 07279DB12F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "ProjectLumoraTests" */;
+			buildConfigurationList = 07279DB12F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "NotinqTests" */;
 			buildPhases = (
 				07279D962F8AA40400A1D363 /* Sources */,
 				07279D972F8AA40400A1D363 /* Frameworks */,
@@ -221,18 +224,18 @@
 				07279D9C2F8AA40400A1D363 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				07279D9D2F8AA40400A1D363 /* ProjectLumoraTests */,
+				07279D9D2F8AA40400A1D363 /* NotinqTests */,
 			);
-			name = ProjectLumoraTests;
+			name = NotinqTests;
 			packageProductDependencies = (
 			);
-			productName = ProjectLumoraTests;
-			productReference = 07279D9A2F8AA40400A1D363 /* ProjectLumoraTests.xctest */;
+			productName = NotinqTests;
+			productReference = 07279D9A2F8AA40400A1D363 /* NotinqTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		07279DA32F8AA40400A1D363 /* ProjectLumoraUITests */ = {
+		07279DA32F8AA40400A1D363 /* NotinqUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 07279DB42F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "ProjectLumoraUITests" */;
+			buildConfigurationList = 07279DB42F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "NotinqUITests" */;
 			buildPhases = (
 				07279DA02F8AA40400A1D363 /* Sources */,
 				07279DA12F8AA40400A1D363 /* Frameworks */,
@@ -244,13 +247,13 @@
 				07279DA62F8AA40400A1D363 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				07279DA72F8AA40400A1D363 /* ProjectLumoraUITests */,
+				07279DA72F8AA40400A1D363 /* NotinqUITests */,
 			);
-			name = ProjectLumoraUITests;
+			name = NotinqUITests;
 			packageProductDependencies = (
 			);
-			productName = ProjectLumoraUITests;
-			productReference = 07279DA42F8AA40400A1D363 /* ProjectLumoraUITests.xctest */;
+			productName = NotinqUITests;
+			productReference = 07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -276,7 +279,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notin" */;
+			buildConfigurationList = 07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notinq" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -290,9 +293,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				07279D8A2F8AA40300A1D363 /* ProjectLumora */,
-				07279D992F8AA40400A1D363 /* ProjectLumoraTests */,
-				07279DA32F8AA40400A1D363 /* ProjectLumoraUITests */,
+				07279D8A2F8AA40300A1D363 /* Notinq */,
+				07279D992F8AA40400A1D363 /* NotinqTests */,
+				07279DA32F8AA40400A1D363 /* NotinqUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -332,6 +335,7 @@
 				07B4628C2FA648A8009B2513 /* TranscriptionEngine.swift in Sources */,
 				07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */,
 				07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */,
+				07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */,
 				07B462902FA648A8009B2513 /* WhisperManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -355,12 +359,12 @@
 /* Begin PBXTargetDependency section */
 		07279D9C2F8AA40400A1D363 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 07279D8A2F8AA40300A1D363 /* ProjectLumora */;
+			target = 07279D8A2F8AA40300A1D363 /* Notinq */;
 			targetProxy = 07279D9B2F8AA40400A1D363 /* PBXContainerItemProxy */;
 		};
 		07279DA62F8AA40400A1D363 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 07279D8A2F8AA40300A1D363 /* ProjectLumora */;
+			target = 07279D8A2F8AA40300A1D363 /* Notinq */;
 			targetProxy = 07279DA52F8AA40400A1D363 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -513,7 +517,7 @@
 				"HEADER_SEARCH_PATHS[arch=*]" = (
 					"$(PROJECT_DIR)/ThirdParty/whisper.cpp\n$(PROJECT_DIR)/ThirdParty/whisper.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp\n$(PROJECT_DIR)/ThirdParty/llama.cpp/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src",
 				);
-				INFOPLIST_FILE = ProjectLumora/Info.plist;
+				INFOPLIST_FILE = Notinq/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -534,7 +538,7 @@
 					"$(inherited)",
 					"-DLLAMA_BRIDGE_FORCE_ENABLE=1",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumora;
+				PRODUCT_BUNDLE_IDENTIFIER = amannair.Notinq;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -573,7 +577,7 @@
 				"HEADER_SEARCH_PATHS[arch=*]" = (
 					"$(PROJECT_DIR)/ThirdParty/whisper.cpp\n$(PROJECT_DIR)/ThirdParty/whisper.cpp/ggml/src\n$(PROJECT_DIR)/ThirdParty/llama.cpp\n$(PROJECT_DIR)/ThirdParty/llama.cpp/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/include\n$(PROJECT_DIR)/ThirdParty/llama.cpp/ggml/src",
 				);
-				INFOPLIST_FILE = ProjectLumora/Info.plist;
+				INFOPLIST_FILE = Notinq/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -594,7 +598,7 @@
 					"$(inherited)",
 					"-DLLAMA_BRIDGE_FORCE_ENABLE=1",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumora;
+				PRODUCT_BUNDLE_IDENTIFIER = amannair.Notinq;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -616,14 +620,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumoraTests;
+				PRODUCT_BUNDLE_IDENTIFIER = amannair.NotinqTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ProjectLumora.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ProjectLumora";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Notinq.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Notinq";
 			};
 			name = Debug;
 		};
@@ -637,14 +641,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumoraTests;
+				PRODUCT_BUNDLE_IDENTIFIER = amannair.NotinqTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ProjectLumora.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ProjectLumora";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Notinq.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Notinq";
 			};
 			name = Release;
 		};
@@ -656,14 +660,14 @@
 				DEVELOPMENT_TEAM = DV9DU7XP4B;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumoraUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = amannair.NotinqUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = ProjectLumora;
+				TEST_TARGET_NAME = Notinq;
 			};
 			name = Debug;
 		};
@@ -675,21 +679,21 @@
 				DEVELOPMENT_TEAM = DV9DU7XP4B;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = amannair.ProjectLumoraUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = amannair.NotinqUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = ProjectLumora;
+				TEST_TARGET_NAME = Notinq;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notin" */ = {
+		07279D862F8AA40300A1D363 /* Build configuration list for PBXProject "Notinq" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07279DAC2F8AA40400A1D363 /* Debug */,
@@ -698,7 +702,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		07279DAE2F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "ProjectLumora" */ = {
+		07279DAE2F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "Notinq" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07279DAF2F8AA40400A1D363 /* Debug */,
@@ -707,7 +711,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		07279DB12F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "ProjectLumoraTests" */ = {
+		07279DB12F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "NotinqTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07279DB22F8AA40400A1D363 /* Debug */,
@@ -716,7 +720,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		07279DB42F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "ProjectLumoraUITests" */ = {
+		07279DB42F8AA40400A1D363 /* Build configuration list for PBXNativeTarget "NotinqUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07279DB52F8AA40400A1D363 /* Debug */,

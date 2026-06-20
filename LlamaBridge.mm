@@ -1,4 +1,5 @@
 #import "LlamaBridge.h"
+#import <atomic>
 #import <cstring>
 #import <mutex>
 #import <string>
@@ -22,7 +23,9 @@ struct PLLlamaHandle {
     llama_sampler *sampler = nullptr;
     int32_t nCtx = 2048;
     int32_t nBatch = 512;
+    PLLlamaParams params = { 4, 2048, 8, 0.6f, 0.9f, 1.1f };
     std::mutex mutex;
+    std::atomic_bool cancelRequested { false };
 };
 #endif
 
@@ -36,6 +39,22 @@ bool PLLlamaBackendAvailable(void) {
 
 void *PLLlamaCreate(const char *modelPath) {
 #if LLAMA_BRIDGE_ENABLED
+    PLLlamaParams params;
+    params.n_threads = 4;
+    params.n_ctx = 2048;
+    params.n_gpu_layers = 8;
+    params.temperature = 0.6f;
+    params.top_p = 0.9f;
+    params.repeat_penalty = 1.1f;
+    return PLLlamaCreateWithParams(modelPath, params);
+#else
+    (void)modelPath;
+    return nullptr;
+#endif
+}
+
+void *PLLlamaCreateWithParams(const char *modelPath, PLLlamaParams params) {
+#if LLAMA_BRIDGE_ENABLED
     if (!modelPath) {
         return nullptr;
     }
@@ -44,9 +63,11 @@ void *PLLlamaCreate(const char *modelPath) {
 
     auto *handle = new PLLlamaHandle();
     handle->modelPath = modelPath;
+    handle->params = params;
+    handle->nCtx = params.n_ctx > 0 ? params.n_ctx : handle->nCtx;
 
     llama_model_params modelParams = llama_model_default_params();
-    modelParams.n_gpu_layers = 999;
+    modelParams.n_gpu_layers = params.n_gpu_layers > 0 ? params.n_gpu_layers : 0;
     handle->model = llama_model_load_from_file(modelPath, modelParams);
     if (!handle->model) {
         delete handle;
@@ -54,14 +75,11 @@ void *PLLlamaCreate(const char *modelPath) {
     }
 
     llama_context_params ctxParams = llama_context_default_params();
-    const int32_t trainCtx = llama_n_ctx_train(handle->model);
-    if (trainCtx > 0) {
-        handle->nCtx = trainCtx > 4096 ? 4096 : trainCtx;
-    }
     ctxParams.n_ctx = handle->nCtx;
     ctxParams.n_batch = handle->nBatch;
-    ctxParams.n_threads = 6;
-    ctxParams.n_threads_batch = 6;
+    const int32_t threads = params.n_threads > 0 ? params.n_threads : 4;
+    ctxParams.n_threads = threads;
+    ctxParams.n_threads_batch = threads;
 
     handle->ctx = llama_init_from_model(handle->model, ctxParams);
     if (!handle->ctx) {
@@ -83,15 +101,29 @@ void *PLLlamaCreate(const char *modelPath) {
     }
 
     llama_sampler_chain_add(handle->sampler, llama_sampler_init_top_k(40));
-    llama_sampler_chain_add(handle->sampler, llama_sampler_init_top_p(0.88f, 1));
-    llama_sampler_chain_add(handle->sampler, llama_sampler_init_penalties(96, 1.24f, 0.0f, 0.0f));
-    llama_sampler_chain_add(handle->sampler, llama_sampler_init_temp(0.62f));
+    llama_sampler_chain_add(handle->sampler, llama_sampler_init_top_p(params.top_p > 0 ? params.top_p : 0.9f, 1));
+    llama_sampler_chain_add(handle->sampler, llama_sampler_init_penalties(96, params.repeat_penalty > 0 ? params.repeat_penalty : 1.1f, 0.0f, 0.0f));
+    llama_sampler_chain_add(handle->sampler, llama_sampler_init_temp(params.temperature > 0 ? params.temperature : 0.6f));
     llama_sampler_chain_add(handle->sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     return handle;
 #else
     (void)modelPath;
+    (void)params;
     return nullptr;
+#endif
+}
+
+void PLLamaCancelGeneration(void *handle) {
+#if LLAMA_BRIDGE_ENABLED
+    auto *h = static_cast<PLLlamaHandle *>(handle);
+    if (!h) {
+        return;
+    }
+
+    h->cancelRequested.store(true, std::memory_order_relaxed);
+#else
+    (void)handle;
 #endif
 }
 
@@ -130,6 +162,8 @@ bool PLLamaGenerateStream(void *handle, const char *prompt, int maxTokens, Token
         return false;
     }
 
+    h->cancelRequested.store(false, std::memory_order_relaxed);
+
     std::lock_guard<std::mutex> lock(h->mutex);
     if (!h->model || !h->ctx || !h->sampler) {
         return false;
@@ -166,19 +200,33 @@ bool PLLamaGenerateStream(void *handle, const char *prompt, int maxTokens, Token
         return false;
     }
 
-    llama_batch batch = llama_batch_init((int32_t)promptTokens.size(), 0, 1);
-    for (int32_t i = 0; i < (int32_t)promptTokens.size(); ++i) {
-        batch.token[i] = promptTokens[i];
-        batch.pos[i] = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == (int32_t)promptTokens.size() - 1);
-    }
-    batch.n_tokens = (int32_t)promptTokens.size();
+    // llama_decode expects batches no larger than n_batch. Flashcards often use the entire note as context,
+    // which can easily exceed the default n_batch (512) and cause llama.cpp to abort internally.
+    // Decode the prompt in chunks to respect n_batch.
+    const int32_t totalPromptTokens = (int32_t)promptTokens.size();
+    for (int32_t start = 0; start < totalPromptTokens; start += h->nBatch) {
+        if (h->cancelRequested.load(std::memory_order_relaxed)) {
+            return false;
+        }
 
-    if (llama_decode(h->ctx, batch) != 0) {
+        const int32_t count = std::min<int32_t>(h->nBatch, totalPromptTokens - start);
+
+        llama_batch batch = llama_batch_init(count, 0, 1);
+        for (int32_t i = 0; i < count; ++i) {
+            const int32_t absoluteIndex = start + i;
+            batch.token[i] = promptTokens[absoluteIndex];
+            batch.pos[i] = absoluteIndex;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (absoluteIndex == totalPromptTokens - 1);
+        }
+        batch.n_tokens = count;
+
+        const int decodeResult = llama_decode(h->ctx, batch);
         llama_batch_free(batch);
-        return false;
+        if (decodeResult != 0 || h->cancelRequested.load(std::memory_order_relaxed)) {
+            return false;
+        }
     }
 
     bool emittedToken = false;
@@ -188,6 +236,10 @@ bool PLLamaGenerateStream(void *handle, const char *prompt, int maxTokens, Token
     int32_t curPos = (int32_t)promptTokens.size();
 
     for (int i = 0; i < maxTokens && curPos < h->nCtx - 1; ++i) {
+        if (h->cancelRequested.load(std::memory_order_relaxed)) {
+            return false;
+        }
+
         const llama_token next = llama_sampler_sample(h->sampler, h->ctx, -1);
         if (next == llama_vocab_eos(vocab)) {
             break;
@@ -237,8 +289,8 @@ bool PLLamaGenerateStream(void *handle, const char *prompt, int maxTokens, Token
 
         const int decodeResult = llama_decode(h->ctx, nextBatch);
         llama_batch_free(nextBatch);
-        if (decodeResult != 0) {
-            break;
+        if (decodeResult != 0 || h->cancelRequested.load(std::memory_order_relaxed)) {
+            return false;
         }
         curPos += 1;
 
@@ -251,7 +303,6 @@ bool PLLamaGenerateStream(void *handle, const char *prompt, int maxTokens, Token
         }
     }
 
-    llama_batch_free(batch);
     return emittedToken;
 #else
     (void)handle;

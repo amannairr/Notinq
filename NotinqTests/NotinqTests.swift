@@ -1,14 +1,14 @@
 //
-//  ProjectLumoraTests.swift
-//  ProjectLumoraTests
+//  NotinqTests.swift
+//  NotinqTests
 //
 //  Created by Aman Nair on 11/04/26.
 //
 
 import Testing
-@testable import ProjectLumora
+@testable import Notinq
 
-struct ProjectLumoraTests {
+struct NotinqTests {
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.

@@ -1,13 +1,13 @@
 //
-//  ProjectLumoraUITestsLaunchTests.swift
-//  ProjectLumoraUITests
+//  NotinqUITestsLaunchTests.swift
+//  NotinqUITests
 //
 //  Created by Aman Nair on 11/04/26.
 //
 
 import XCTest
 
-final class ProjectLumoraUITestsLaunchTests: XCTestCase {
+final class NotinqUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

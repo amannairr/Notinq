@@ -1,13 +1,13 @@
 //
-//  ProjectLumoraUITests.swift
-//  ProjectLumoraUITests
+//  NotinqUITests.swift
+//  NotinqUITests
 //
 //  Created by Aman Nair on 11/04/26.
 //
 
 import XCTest
 
-final class ProjectLumoraUITests: XCTestCase {
+final class NotinqUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
