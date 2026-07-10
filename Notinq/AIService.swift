@@ -5,6 +5,7 @@ enum AIAction {
     case rewrite
     case explain
     case add
+    case ask
 
     var title: String {
         switch self {
@@ -12,6 +13,7 @@ enum AIAction {
         case .rewrite: return "Rewrite"
         case .explain: return "Explanation"
         case .add: return "Addition"
+        case .ask: return "Ask AI"
         }
     }
 
@@ -21,6 +23,7 @@ enum AIAction {
         case .rewrite: return "Rewrite"
         case .explain: return "Explain"
         case .add: return "Continue"
+        case .ask: return "Ask AI"
         }
     }
 }
@@ -39,6 +42,7 @@ enum AIRequestKind {
     case studySelection
     case studyEvaluation
     case noteCompletenessAnalysis
+    case knowledgeGraphExtraction
     case followUp
 
     var maxTokens: Int32 {
@@ -70,6 +74,8 @@ enum AIRequestKind {
             return min(cap, 280)
         case .noteCompletenessAnalysis:
             return min(cap, 720)
+        case .knowledgeGraphExtraction:
+            return min(max(cap, 768), 960)
         case .followUp:
             return min(cap, 300)
         }
@@ -114,5 +120,9 @@ final class AIService {
     ) {
         let provider = router.route(contextLength: contextLength)
         provider.runStreaming(prompt: prompt, maxTokens: kind.maxTokens, onToken: onToken, completion: completion)
+    }
+
+    func cancelGeneration() {
+        AIModelManager.shared.currentLlamaContext()?.cancelGeneration()
     }
 }

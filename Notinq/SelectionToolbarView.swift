@@ -21,7 +21,7 @@ struct SelectionToolbarView: View {
             ActionIcon(name: "summary", label: "Summarize", action: onSummarize)
             ActionIcon(name: "rewrite", label: "Rewrite", action: onRewrite)
             ActionIcon(name: "explain", label: "Explain", action: onExplain)
-            ActionIcon(name: "ask", label: "Add", action: onAdd)
+            ActionIcon(name: "ask", label: "Ask AI", action: onAdd)
         }
         .padding(6)
         .background(

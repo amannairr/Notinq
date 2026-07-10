@@ -95,7 +95,7 @@ struct AITextView: NSViewRepresentable {
                 return
             }
 
-            if context.coordinator.documentID != documentID {
+            if context.coordinator.documentID != documentID || textView.string != documentText {
                 context.coordinator.documentID = documentID
                 context.coordinator.replaceDocumentText(in: textView, with: documentText)
             }
@@ -116,7 +116,7 @@ struct AITextView: NSViewRepresentable {
         var aiBlockActions: NSView?
         var documentID: UUID?
         private var debouncedSaveWorkItem: DispatchWorkItem?
-        private let saveDebounceSeconds: TimeInterval = 0.7
+        private let saveDebounceSeconds: TimeInterval = 0.75
         
         init(_ parent: AITextView) {
             self.parent = parent
@@ -204,7 +204,9 @@ struct AITextView: NSViewRepresentable {
             }
 
             hosting.frame.origin = CGPoint(x: originX, y: originY)
-            textView.addSubview(hosting)
+            hosting.wantsLayer = true
+            hosting.layer?.zPosition = .greatestFiniteMagnitude
+            textView.addSubview(hosting, positioned: .above, relativeTo: nil)
             selectionToolbar = hosting
         }
 
@@ -237,7 +239,9 @@ struct AITextView: NSViewRepresentable {
             let originY = max(8, rectInTextView.maxY + 5)
 
             hosting.frame.origin = CGPoint(x: originX, y: originY)
-            textView.addSubview(hosting)
+            hosting.wantsLayer = true
+            hosting.layer?.zPosition = .greatestFiniteMagnitude
+            textView.addSubview(hosting, positioned: .above, relativeTo: nil)
             aiBlockActions = hosting
         }
         

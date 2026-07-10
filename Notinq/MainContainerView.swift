@@ -14,6 +14,7 @@ struct MainContainerView: View {
     @StateObject private var appState = AppState()
     @State private var showCommandBar = false
     @State private var selectedMode: AppMode = .notes
+    @State private var studyPanelWidth: CGFloat = 410
 
     // Panel widths
     @State private var sidebarWidth: CGFloat = 230
@@ -24,162 +25,212 @@ struct MainContainerView: View {
     @State private var isSidebarCollapsed = false
     @State private var isNotesCollapsed = false
 
+    @State private var showLearningInsightsPanel = false
+
     var body: some View {
-        ZStack {
+        GeometryReader { proxy in
+            ZStack {
+                HStack(spacing: 0) {
 
-            HStack(spacing: 0) {
+                    ModeBarView(selectedMode: $appState.selectedMode)
+                        .frame(width: 80)
 
-                ModeBarView(selectedMode: $appState.selectedMode)
-                    .frame(width: 80)
-
-                if isSidebarCollapsed {
-                    collapsedBar(
-                        icon: "sidebar.right",
-                        tooltip: "Show sidebar",
-                        colors: [Color.bgSidebar, Color.bgSidebar]
-                    ) {
-                        isSidebarCollapsed = false
-                    }
-                } else {
-                    SidebarView(isCollapsed: $isSidebarCollapsed)
-                        .frame(width: sidebarWidth)
-                }
-
-                // 🔥 HANDLE 1
-                if !isSidebarCollapsed {
-                    resizeHandle(
-                        onDragChanged: { currentX in
-                            if sidebarLastDragX == nil {
-                                sidebarLastDragX = currentX
-                            }
-                            if let lastX = sidebarLastDragX {
-                                let delta = currentX - lastX
-                                withTransaction(Transaction(animation: nil)) {
-                                    sidebarWidth = clamp(sidebarWidth + delta, min: 196, max: 320)
-                                }
-                                sidebarLastDragX = currentX
-                            }
-                        },
-                        onEnd: {
-                            sidebarLastDragX = nil
-                        },
-                        onDoubleClick: {
-                            sidebarWidth = 230
+                    if isSidebarCollapsed {
+                        collapsedBar(
+                            icon: "sidebar.right",
+                            tooltip: "Show sidebar",
+                            colors: [Color.bgSidebar, Color.bgSidebar]
+                        ) {
+                            isSidebarCollapsed = false
                         }
-                    )
-                }
-
-                if isNotesCollapsed {
-                    collapsedBar(
-                        icon: "sidebar.right",
-                        tooltip: "Show notes list",
-                        colors: [Color.bgNotesPane, Color.bgNotesPane]
-                    ) {
-                        isNotesCollapsed = false
+                    } else {
+                        SidebarView(isCollapsed: $isSidebarCollapsed)
+                            .frame(width: sidebarWidth)
                     }
-                } else {
-                    NotesListView(isCollapsed: $isNotesCollapsed)
-                        .frame(width: listWidth)
-                        .background(Color.clear)
-                }
 
-                // 🔥 HANDLE 2
-                if !isNotesCollapsed {
-                    resizeHandle(
-                        onDragChanged: { currentX in
-                            if listLastDragX == nil {
-                                listLastDragX = currentX
-                            }
-                            if let lastX = listLastDragX {
-                                let delta = currentX - lastX
-                                withTransaction(Transaction(animation: nil)) {
-                                    listWidth = clamp(listWidth + delta, min: 260, max: 420)
+                    // 🔥 HANDLE 1
+                    if !isSidebarCollapsed {
+                        resizeHandle(
+                            onDragChanged: { currentX in
+                                if sidebarLastDragX == nil {
+                                    sidebarLastDragX = currentX
                                 }
-                                listLastDragX = currentX
+                                if let lastX = sidebarLastDragX {
+                                    let delta = currentX - lastX
+                                    withTransaction(Transaction(animation: nil)) {
+                                        sidebarWidth = clamp(sidebarWidth + delta, min: 196, max: 320)
+                                    }
+                                    sidebarLastDragX = currentX
+                                }
+                            },
+                            onEnd: {
+                                sidebarLastDragX = nil
+                            },
+                            onDoubleClick: {
+                                sidebarWidth = 230
                             }
-                        },
-                        onEnd: {
-                            listLastDragX = nil
-                        },
-                        onDoubleClick: {
-                            listWidth = 328
-                        }
-                    )
-                }
-
-                ZStack {
-                    switch appState.selectedMode {
-                    case .notes:
-                        EditorView()
-                    case .ai:
-                        AIWorkspaceView(
-                            noteTitle: currentNoteTitle,
-                            noteText: currentNoteText,
-                            lastUpdatedAt: currentNoteUpdatedAt
                         )
-                    case .study:
-                        StudyView(
-                            noteID: appState.selectedNoteID,
+                    }
+
+                    if isNotesCollapsed {
+                        collapsedBar(
+                            icon: "sidebar.right",
+                            tooltip: "Show notes list",
+                            colors: [Color.bgNotesPane, Color.bgNotesPane]
+                        ) {
+                            isNotesCollapsed = false
+                        }
+                    } else {
+                        NotesListView(isCollapsed: $isNotesCollapsed)
+                            .frame(width: listWidth)
+                            .background(Color.clear)
+                    }
+
+                    // 🔥 HANDLE 2
+                    if !isNotesCollapsed {
+                        resizeHandle(
+                            onDragChanged: { currentX in
+                                if listLastDragX == nil {
+                                    listLastDragX = currentX
+                                }
+                                if let lastX = listLastDragX {
+                                    let delta = currentX - lastX
+                                    withTransaction(Transaction(animation: nil)) {
+                                        listWidth = clamp(listWidth + delta, min: 260, max: 420)
+                                    }
+                                    listLastDragX = currentX
+                                }
+                            },
+                            onEnd: {
+                                listLastDragX = nil
+                            },
+                            onDoubleClick: {
+                                listWidth = 328
+                            }
+                        )
+                    }
+
+                    ZStack {
+                        switch appState.selectedMode {
+                        case .notes, .study:
+                            if appState.selectedMode == .study {
+                                StudyView(
+                                    noteID: currentNoteID,
+                                    noteTitle: currentNoteTitle,
+                                    noteText: currentNoteText,
+                                    selectedText: "",
+                                    lastUpdatedAt: currentNoteUpdatedAt,
+                                    noteHasContent: !currentNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                    studyData: currentStudyData,
+                                    isGenerating: false,
+                                    generationStatus: "Generating study materials...",
+                                    generationSummary: nil,
+                                    statusMessage: nil,
+                                    statusTone: .neutral,
+                                    onGenerateMaterials: {},
+                                    onClose: { appState.selectedMode = .notes },
+                                    onExplainSimply: { insertStudyContentIntoCurrentNote(explainCurrentNoteSimply()) },
+                                    onGiveExample: { insertStudyContentIntoCurrentNote(explainCurrentNoteExample()) },
+                                    onCompareConcepts: { insertStudyContentIntoCurrentNote(explainCurrentNoteComparison()) },
+                                    onCreateAnalogy: { insertStudyContentIntoCurrentNote(explainCurrentNoteAnalogy()) },
+                                    onMarkFlashcardReviewed: { card in markFlashcardReviewed(card) },
+                                    onRecordQuizAttempt: { quizSet, score, totalQuestions in
+                                        recordQuizAttempt(quizSet: quizSet, score: score, totalQuestions: totalQuestions)
+                                    },
+                                    onEvaluateTestMe: { question, answer, completion in
+                                        evaluateTestMe(question: question, answer: answer, completion: completion)
+                                    },
+                                    onRecordTestMeSession: { score, totalQuestions, concepts in
+                                        recordTestMeSession(score: score, totalQuestions: totalQuestions, concepts: concepts)
+                                    },
+                                    onInsertContent: { text in insertStudyContentIntoCurrentNote(text) },
+                                    panelWidth: $studyPanelWidth
+                                )
+                            } else {
+                                EditorView(
+                                    onAnalyzeLecture: analyzeLecture,
+                                    onUpdateKnowledgeGraph: updateCurrentKnowledgeGraph
+                                )
+                            }
+                        case .ai:
+                            AIWorkspaceView(
+                                noteTitle: currentNoteTitle,
+                                noteText: currentNoteText,
+                                lastUpdatedAt: currentNoteUpdatedAt
+                            )
+                        case .search:
+                            SearchView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.bgEditor)
+                    .shadow(color: .black.opacity(0.045), radius: 22, x: -10, y: 0)
+                    .animation(.easeInOut(duration: 0.15), value: appState.selectedMode)
+                }
+
+                if showCommandBar {
+                    CommandBarView(isVisible: $showCommandBar)
+                }
+
+                if appState.isSettingsOpen {
+                    SettingsOverlayView()
+                        .environmentObject(appState)
+                        .transition(.opacity)
+                        .zIndex(10)
+                }
+
+                if showLearningInsightsPanel {
+                    Color.black.opacity(0.18)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            showLearningInsightsPanel = false
+                        }
+                        .transition(.opacity)
+
+                    if let currentNoteID {
+                        LearningInsightsWorkspaceView(
                             noteTitle: currentNoteTitle,
-                            selectedText: "",
-                            noteHasContent: !currentNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                            studyData: currentStudyData,
-                            isGenerating: false,
-                            generationStatus: "Generate Study Materials",
-                            generationSummary: nil,
-                            statusMessage: nil,
-                            statusTone: .neutral,
-                            onGenerateMaterials: {
-                                appState.selectedMode = .study
+                            studentNotes: currentNoteText,
+                            initialAnalysis: currentStudyData.learningInsights.hasResults ? currentStudyData.learningInsights : nil,
+                            onSaveAnalysis: { result in
+                                appState.updateLearningInsights(result, for: currentNoteID)
+                            },
+                            onInsertIntoNote: { text in
+                                insertStudyContentIntoCurrentNote(text)
                             },
                             onClose: {
-                                appState.selectedMode = .notes
-                            },
-                            onExplainSimply: {},
-                            onGiveExample: {},
-                            onCompareConcepts: {},
-                            onCreateAnalogy: {},
-                            onMarkFlashcardReviewed: { _ in },
-                            onRecordQuizAttempt: { _, _, _ in },
-                            onEvaluateTestMe: { _, _, completion in
-                                completion(
-                                    StudyTutorEvaluation(
-                                        verdict: .almost,
-                                        feedback: "Not implemented",
-                                        explanation: "",
-                                        modelAnswer: "",
-                                        awardedPoint: 0
-                                    )
-                                )
-                            },
-                            onRecordTestMeSession: { _, _, _ in }
+                                showLearningInsightsPanel = false
+                            }
                         )
-                    case .search:
-                        SearchView()
+                        .frame(width: min(max(proxy.size.width * 0.74, 860), 1160), height: min(proxy.size.height - 24, 840))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                        .padding(.trailing, 18)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .zIndex(20)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.bgEditor)
-                .shadow(color: .black.opacity(0.045), radius: 22, x: -10, y: 0)
-                .animation(.easeInOut(duration: 0.15), value: appState.selectedMode)
             }
-
-            if showCommandBar {
-                CommandBarView(isVisible: $showCommandBar)
-            }
-
-            if appState.isSettingsOpen {
-                SettingsOverlayView()
-                    .environmentObject(appState)
-                    .transition(.opacity)
-                    .zIndex(10)
+            .background(Color.bgPrimary)
+            .environmentObject(appState)
+            .onAppear {
+                setupKeyboardShortcuts()
             }
         }
-        .background(Color.bgPrimary)
-        .environmentObject(appState)
-        .onAppear {
-            setupKeyboardShortcuts()
-        }
+    }
+
+    private func analyzeLecture() {
+        showLearningInsightsPanel = true
+    }
+
+    private func updateCurrentKnowledgeGraph() {
+        guard let currentNoteID else { return }
+        let note = NoteFile(
+            id: currentNoteID,
+            title: currentNoteTitle,
+            content: currentNoteText,
+            updatedAt: currentNoteUpdatedAt ?? Date()
+        )
+        KnowledgeGraphManager.shared.generateGraph(note: note)
     }
 
     private var currentNoteID: UUID? {
@@ -204,6 +255,215 @@ struct MainContainerView: View {
     private var currentStudyData: NoteStudyData {
         guard let currentNoteID else { return NoteStudyData() }
         return appState.studyData(for: currentNoteID)
+    }
+
+    private func insertStudyContentIntoCurrentNote(_ text: String) {
+        guard let currentNoteID else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let existing = currentNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let updatedText: String
+        if existing.isEmpty {
+            updatedText = trimmed
+        } else {
+            updatedText = currentNoteText + "\n\n" + trimmed
+        }
+
+        appState.updateNoteContent(updatedText, for: currentNoteID)
+    }
+
+    private func currentStudyConcepts(limit: Int = 4) -> [String] {
+        let separators = CharacterSet.alphanumerics.inverted
+        let tokens = currentNoteText
+            .components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count > 4 }
+
+        var seen = Set<String>()
+        return tokens.compactMap { token in
+            let key = token.lowercased()
+            guard seen.insert(key).inserted else { return nil }
+            return token.prefix(1).uppercased() + token.dropFirst()
+        }
+        .prefix(limit)
+        .map { $0 }
+    }
+
+    private func explainCurrentNoteSimply() -> String {
+        let concepts = currentStudyConcepts(limit: 3)
+        let topic = concepts.first ?? currentNoteTitle
+        return [
+            "Simple explanation",
+            "\(topic) is the central idea in \(currentNoteTitle).",
+            "In plain language, the note is describing how \(currentNoteText.isEmpty ? "the topic" : topic.lowercased()) works in context.",
+            "Key takeaway",
+            "Focus on the main definition, the example, and the relationship to nearby concepts."
+        ].joined(separator: "\n")
+    }
+
+    private func explainCurrentNoteExample() -> String {
+        let concepts = currentStudyConcepts(limit: 3)
+        let topic = concepts.first ?? currentNoteTitle
+        return [
+            "Concrete example",
+            "If \(topic.lowercased()) feels abstract, think about a real situation where it appears in the note.",
+            "Example",
+            "A student applying \(topic.lowercased()) would identify the definition, then test it against the scenario described in the note.",
+            "What to insert",
+            "Add one specific example from class, practice, or a worked problem."
+        ].joined(separator: "\n")
+    }
+
+    private func explainCurrentNoteComparison() -> String {
+        let concepts = currentStudyConcepts(limit: 4)
+        let left = concepts.first ?? currentNoteTitle
+        let right = concepts.dropFirst().first ?? "a related idea"
+        return [
+            "Comparison",
+            "\(left) and \(right) are related, but they serve different roles in the note.",
+            "\(left) is the core term.",
+            "\(right) is the nearby concept that helps define or contrast it.",
+            "Use this comparison to separate definition from application."
+        ].joined(separator: "\n")
+    }
+
+    private func explainCurrentNoteAnalogy() -> String {
+        let concepts = currentStudyConcepts(limit: 2)
+        let topic = concepts.first ?? currentNoteTitle
+        let anchor = concepts.dropFirst().first ?? "a familiar system"
+        return [
+            "Analogy",
+            "\(topic) works like \(anchor) because both organize information into something easier to understand.",
+            "Analogy",
+            "Think of the note as a map: \(topic) tells you what matters, and the supporting details show how the pieces fit together."
+        ].joined(separator: "\n")
+    }
+
+    private func markFlashcardReviewed(_ card: StudyFlashcard) {
+        guard let currentNoteID else { return }
+        let concept = inferConcept(from: card.front) ?? inferConcept(from: card.back) ?? card.type.title
+        appState.mutateStudyData(for: currentNoteID) { studyData in
+            studyData.progress.flashcardsReviewed += 1
+            if let index = studyData.learningMemory.firstIndex(where: { normalizedStudyConceptKey($0.concept) == normalizedStudyConceptKey(concept) }) {
+                studyData.learningMemory[index].reviewHistory.append(Date())
+                studyData.learningMemory[index].lastReviewedAt = Date()
+                studyData.learningMemory[index].masteredCount += 1
+                studyData.learningMemory[index].lastOutcome = .correct
+            } else {
+                studyData.learningMemory.append(
+                    StudyMemoryEntry(
+                        concept: concept,
+                        masteredCount: 1,
+                        missedCount: 0,
+                        reviewHistory: [Date()],
+                        lastReviewedAt: Date(),
+                        lastOutcome: .correct
+                    )
+                )
+            }
+            studyData.streaks.flashcardsCompleted += 1
+            studyData.streaks.studySessions += 1
+            studyData.streaks.lastStudiedAt = Date()
+            studyData.lastGeneratedAt = Date()
+        }
+    }
+
+    private func recordQuizAttempt(quizSet: StudyQuizSet, score: Int, totalQuestions: Int) {
+        guard let currentNoteID else { return }
+        let questions = max(totalQuestions, 1)
+        let percentage = Double(score) / Double(questions) * 100
+        appState.mutateStudyData(for: currentNoteID) { studyData in
+            studyData.progress.quizAttempts.insert(
+                StudyQuizAttempt(
+                    quizSetID: quizSet.id,
+                    quizTitle: quizSet.title,
+                    score: score,
+                    totalQuestions: questions,
+                    percentage: percentage
+                ),
+                at: 0
+            )
+            studyData.streaks.quizzesCompleted += 1
+            studyData.streaks.studySessions += 1
+            studyData.streaks.lastStudiedAt = Date()
+            studyData.lastGeneratedAt = Date()
+        }
+    }
+
+    private func evaluateTestMe(question: StudyTutorQuestion, answer: String, completion: @escaping (StudyTutorEvaluation) -> Void) {
+        let normalizedExpected = normalizeText(question.expectedAnswer)
+        let normalizedAnswer = normalizeText(answer)
+        let expectedWords = Set(normalizedExpected.split(separator: " ").map(String.init))
+        let answerWords = Set(normalizedAnswer.split(separator: " ").map(String.init))
+        let overlap = Double(expectedWords.intersection(answerWords).count)
+        let denominator = Double(max(expectedWords.count, 1))
+        let matchScore = overlap / denominator
+
+        let verdict: StudyTutorVerdict
+        if matchScore > 0.75 {
+            verdict = .correct
+        } else if matchScore > 0.35 {
+            verdict = .almost
+        } else {
+            verdict = .incorrect
+        }
+
+        let evaluation = StudyTutorEvaluation(
+            verdict: verdict,
+            feedback: verdict == .correct ? "Strong recall." : verdict == .almost ? "Close, but add one more detail." : "Review the concept again and focus on the definition.",
+            explanation: question.explanation.isEmpty ? "Compare your answer with the expected answer and add missing context." : question.explanation,
+            modelAnswer: question.expectedAnswer,
+            awardedPoint: verdict == .correct ? 1 : 0
+        )
+        completion(evaluation)
+    }
+
+    private func recordTestMeSession(score: Int, totalQuestions: Int, concepts: [String]) {
+        guard let currentNoteID else { return }
+        let questions = max(totalQuestions, 1)
+        appState.mutateStudyData(for: currentNoteID) { studyData in
+            studyData.progress.testMeSessions.append(
+                StudyTestMeSessionRecord(
+                    score: score,
+                    totalQuestions: questions,
+                    concepts: concepts
+                )
+            )
+            studyData.streaks.studySessions += 1
+            studyData.streaks.quizzesCompleted += 1
+            studyData.streaks.lastStudiedAt = Date()
+            studyData.lastGeneratedAt = Date()
+        }
+    }
+
+    private func inferConcept(from text: String) -> String? {
+        let cleaned = text
+            .replacingOccurrences(of: "Question", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "Correct answer", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "Concept prompt", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "Definition prompt", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "Explanation", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "Supporting context", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleaned.isEmpty else { return nil }
+        return cleaned
+            .split(separator: "\n")
+            .map(String.init)
+            .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
+    private func normalizeText(_ value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func normalizedStudyConceptKey(_ value: String) -> String {
+        normalizeText(value)
     }
 }
 

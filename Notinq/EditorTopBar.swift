@@ -14,8 +14,12 @@ struct EditorTopBar: View {
     @Binding var styleState: TextStyleState
     var onAskAI: () -> Void = {}
     var onGenerateStudyMaterials: () -> Void = {}
+    var onAnalyzeLecture: () -> Void = {}
+    var onUpdateKnowledgeGraph: () -> Void = {}
     var isGeneratingStudyMaterials: Bool = false
+    var isKnowledgeGraphGenerating: Bool = false
     var canGenerateStudyMaterials: Bool = true
+    var canUpdateKnowledgeGraph: Bool = true
     @State private var isMicActive = false
 
     private let fontFamilies = NSFontManager.shared.availableFontFamilies.sorted()
@@ -222,6 +226,71 @@ struct EditorTopBar: View {
                 .disabled(isGeneratingStudyMaterials)
                 .toolbarTooltip("Generate Study Materials")
 
+                Button(action: onAnalyzeLecture) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Analyze Lecture")
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(Color.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.16, green: 0.49, blue: 0.86),
+                                Color(red: 0.27, green: 0.62, blue: 0.92)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canGenerateStudyMaterials)
+                .toolbarTooltip("Open Learning Insights")
+
+                Button(action: onUpdateKnowledgeGraph) {
+                    HStack(spacing: 7) {
+                        if isKnowledgeGraphGenerating {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "circle.grid.2x2")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Text(isKnowledgeGraphGenerating ? "Updating..." : "Update Graph")
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(canUpdateKnowledgeGraph ? Color.white : Color.textTertiary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(
+                        Group {
+                            if canUpdateKnowledgeGraph {
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.27, green: 0.43, blue: 0.55),
+                                        Color(red: 0.34, green: 0.56, blue: 0.68)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            } else {
+                                Color.hoverWarm
+                            }
+                        }
+                    )
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isKnowledgeGraphGenerating || !canUpdateKnowledgeGraph)
+                .toolbarTooltip("Update Knowledge Graph")
+
                 ToolbarButton(icon: "sparkles", label: "Ask AI") {
                     onAskAI()
                 }
@@ -241,12 +310,14 @@ struct EditorTopBar: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
         .padding(.horizontal, 22)
         .padding(.vertical, 11)
         .background(.ultraThinMaterial)
         .background(Color.bgEditor.opacity(0.92))
+        .clipShape(Rectangle())
         .shadow(color: .black.opacity(0.018), radius: 8, x: 0, y: 4)
-        .scrollClipDisabled()
         .onDisappear {
             if isMicActive {
                 bridge?.stopLiveTranscription()

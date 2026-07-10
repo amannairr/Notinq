@@ -121,6 +121,7 @@ class AppState: ObservableObject {
         folders[folderIndex].notes[noteIndex].title = trimmed
         folders[folderIndex].notes[noteIndex].updatedAt = Date()
         save()
+        KnowledgeGraphManager.shared.generateGraph(note: folders[folderIndex].notes[noteIndex])
     }
 
     func deleteNote(_ noteID: UUID) {
@@ -137,6 +138,7 @@ class AppState: ObservableObject {
         if selectedNoteID == noteID {
             selectedNoteID = folders[folderIndex].notes.first?.id
         }
+        KnowledgeGraphManager.shared.deleteGraph(noteID: noteID)
         save()
     }
 
@@ -188,6 +190,7 @@ class AppState: ObservableObject {
         updatedFolders[location.folderIndex].notes[location.noteIndex].updatedAt = Date()
         folders = updatedFolders
         save()
+        KnowledgeGraphManager.shared.generateGraph(note: updatedFolders[location.folderIndex].notes[location.noteIndex])
     }
 
     func updateStudyData(_ newStudyData: NoteStudyData, for noteID: UUID) {
