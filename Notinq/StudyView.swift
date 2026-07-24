@@ -14,6 +14,11 @@ enum StudyWorkspaceSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum StudyFlashcardFace: Equatable {
+    case front
+    case back
+}
+
 private extension StudyView {
     var headerActionTitle: String {
         selectedTool.actionLabel
@@ -59,6 +64,20 @@ private extension StudyView {
         }
     }
 
+    func generateAllStudyMaterials() {
+        guard noteID != nil else {
+            transientStatusMessage = "Select a note before generating study material."
+            return
+        }
+
+        generateLearningInsights()
+        generateFlashcards()
+        generateQuizSet()
+        generateSummary()
+        generateKeyConcepts()
+        transientStatusMessage = "Generated study materials for \(noteLabel)."
+    }
+
     func generateLearningInsights() {
         guard let noteID else { return }
         let text = noteContentSource
@@ -81,7 +100,7 @@ private extension StudyView {
     }
 
     func generateFlashcards() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else {
             transientStatusMessage = "Add some note content first."
@@ -101,14 +120,13 @@ private extension StudyView {
             sections: flashcardSections(from: cards)
         )
         storeArtifact(artifact)
-        flashcardIndex = 0
-        isFlashcardFlipped = false
+        resetFlashcardSession()
         persistStudySession(notesReviewed: 1)
         transientStatusMessage = cards.isEmpty ? "No flashcards could be generated." : "Generated \(cards.count) flashcards."
     }
 
     func generateQuizSet() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else {
             transientStatusMessage = "Add some note content first."
@@ -132,7 +150,7 @@ private extension StudyView {
     }
 
     func generateSummary() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else {
             transientStatusMessage = "Add some note content first."
@@ -156,7 +174,7 @@ private extension StudyView {
     }
 
     func generateKeyConcepts() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else {
             transientStatusMessage = "Add some note content first."
@@ -180,7 +198,7 @@ private extension StudyView {
     }
 
     func generateExamPrep() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else {
             transientStatusMessage = "Add some note content first."
@@ -204,7 +222,7 @@ private extension StudyView {
     }
 
     func generateConceptMap() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else { return }
 
@@ -223,7 +241,7 @@ private extension StudyView {
     }
 
     func generateActiveRecallPrompts() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else { return }
 
@@ -244,7 +262,7 @@ private extension StudyView {
     }
 
     func generateNotebookKnowledgeGaps() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else { return }
 
@@ -263,7 +281,7 @@ private extension StudyView {
     }
 
     func generateLearningMemory() {
-        guard let noteID else { return }
+        guard noteID != nil else { return }
         let text = noteContentSource
         guard !text.isEmpty else { return }
 
@@ -572,34 +590,37 @@ private extension StudyView {
     }
 
     func buildQuizSet(from text: String) -> StudyQuizSet {
-        let concepts = extractConceptCandidates(from: text, limit: 10)
+        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 10))
         let sentences = splitSentences(text)
         var questions: [StudyQuizQuestion] = []
 
         for concept in concepts.prefix(4) {
-            let relatedSentence = sentences.first(where: { $0.lowercased().contains(concept.lowercased()) }) ?? text
-            let distractors = concepts.filter { normalizeConceptKey($0) != normalizeConceptKey(concept) }.prefix(3)
-            let options = ([displayConcept(concept)] + distractors.map(displayConcept)).shuffled()
+            let relatedSentence = bestSentence(for: concept, in: sentences) ?? text
+            let distractors = concepts
+                .filter { normalizeConceptKey($0) != normalizeConceptKey(concept) }
+                .prefix(3)
+                .map(displayConcept)
+            let options = ([displayConcept(concept)] + distractors).shuffled()
             questions.append(
                 StudyQuizQuestion(
                     type: .multipleChoice,
-                    prompt: "Which term best matches the idea: \(sentenceFragment(relatedSentence))?",
+                    prompt: "Which concept best matches this note excerpt: \(sentenceFragment(stripCitationMarkers(relatedSentence)))?",
                     options: options,
                     correctAnswer: displayConcept(concept),
-                    explanation: condensedAnswer(from: relatedSentence, for: concept),
+                    explanation: quizExplanation(from: relatedSentence, concept: concept),
                     keywords: [concept]
                 )
             )
         }
 
         for concept in concepts.suffix(3) {
-            let supportingSentence = sentences.first(where: { $0.lowercased().contains(concept.lowercased()) }) ?? text
+            let supportingSentence = bestSentence(for: concept, in: sentences) ?? text
             questions.append(
                 StudyQuizQuestion(
                     type: .shortAnswer,
-                    prompt: "Explain \(displayConcept(concept)).",
+                    prompt: "In your own words, explain \(displayConcept(concept)).",
                     options: [],
-                    correctAnswer: condensedAnswer(from: supportingSentence, for: concept),
+                    correctAnswer: quizShortAnswer(from: supportingSentence, concept: concept),
                     explanation: "A strong answer should define the term and connect it back to the note.",
                     keywords: [concept]
                 )
@@ -636,28 +657,29 @@ private extension StudyView {
     }
 
     func buildExamPrep(from text: String) -> StudyExamPrep {
-        let concepts = extractConceptCandidates(from: text, limit: 10)
+        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 10))
         return StudyExamPrep(
             likelyTopics: buildExamTopics(from: text),
             condensedRevisionGuide: buildExamRevisionSummary(from: text, concepts: concepts),
-            practiceQuestions: buildQuizSet(from: text).questions,
+            practiceQuestions: Array(buildQuizSet(from: text).questions.prefix(6)),
             difficultConcepts: concepts.prefix(4).map(displayConcept)
         )
     }
 
     func buildConceptMap(from text: String) -> [StudyConceptNode] {
         let sentences = splitSentences(text)
-        let concepts = extractConceptCandidates(from: text, limit: 10)
+        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 12))
         let trimmedTitle = noteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let root = concepts.first ?? (trimmedTitle.isEmpty ? nil : trimmedTitle) else { return [] }
 
-        let children = concepts.dropFirst().prefix(4).map { concept in
+        let children = concepts.dropFirst().prefix(5).map { concept in
             let related = sentences
-                .first(where: { $0.lowercased().contains(concept.lowercased()) })
-                .map { extractConceptCandidates(from: $0, limit: 4).filter { normalizeConceptKey($0) != normalizeConceptKey(concept) } } ?? []
+                .filter { $0.lowercased().contains(concept.lowercased()) }
+                .flatMap { extractConceptCandidates(from: $0, limit: 4) }
+                .filter { normalizeConceptKey($0) != normalizeConceptKey(concept) }
             return StudyConceptNode(
                 title: displayConcept(concept),
-                children: related.prefix(2).map { StudyConceptNode(title: displayConcept($0), children: []) }
+                children: dedupeStrings(Array(related.prefix(2))).map { StudyConceptNode(title: displayConcept($0), children: []) }
             )
         }
 
@@ -738,13 +760,16 @@ private extension StudyView {
     }
 
     func supplementalSection(for section: SupplementalStudySection) -> AnyView {
-        let isExpanded = expandedSupplementalSection == section
+        let isExpanded = activeSupplementalSection == section
 
         return AnyView(
             VStack(alignment: .leading, spacing: 12) {
             Button {
                 withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
-                    expandedSupplementalSection = isExpanded ? .learningMemory : section
+                    activeSupplementalSection = Self.toggledSupplementalSection(
+                        activeSection: activeSupplementalSection,
+                        section: section
+                    )
                 }
             } label: {
                 HStack(spacing: 12) {
@@ -773,14 +798,18 @@ private extension StudyView {
                 }
                 .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
                 .padding(14)
-                .background(Color.white.opacity(0.88))
+                .background(Color.studySurfaceRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                        .stroke(Color.studyBorderSoft, lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(section.rawValue)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Toggle this study section.")
 
             if isExpanded {
                 supplementalSectionContent(for: section)
@@ -827,6 +856,18 @@ private extension StudyView {
                 statPill(title: "Total", value: "\(studyData.learningMemory.count)")
             }
 
+            HStack(spacing: 8) {
+                quickAction("Review", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "arrow.counterclockwise") {
+                    focusStudyTool(.flashcards)
+                }
+                quickAction("Practice", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "brain.head.profile") {
+                    focusStudyTool(.quizGenerator)
+                }
+                quickAction("Explore", tint: Color(red: 0.27, green: 0.43, blue: 0.55), icon: "magnifyingglass") {
+                    focusStudyTool(.learningInsights)
+                }
+            }
+
             if studyData.learningMemory.isEmpty {
                 emptyCompactState(title: "No learning memory yet", message: "Generate flashcards or active recall prompts to begin tracking mastered and missed concepts.")
             } else {
@@ -850,6 +891,19 @@ private extension StudyView {
         )
 
         return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                quickAction("Generate Quiz", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "checklist") {
+                    focusStudyTool(.quizGenerator)
+                    generateQuizSet()
+                }
+                quickAction("Compare", tint: Color(red: 0.73, green: 0.35, blue: 0.33), icon: "scale.3d") {
+                    onCompareConcepts()
+                }
+                quickAction("Open Graph", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "circle.grid.2x2") {
+                    focusStudyTool(.keyConcepts)
+                }
+            }
+
             if gaps.isEmpty {
                 emptyCompactState(title: "No obvious notebook gaps", message: "The current note aligns reasonably well with related notes in this notebook.")
             } else {
@@ -866,7 +920,7 @@ private extension StudyView {
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.72))
+                    .background(Color.studySurface)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
             }
@@ -885,6 +939,18 @@ private extension StudyView {
         )
 
         return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                quickAction("Review", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "rectangle.stack") {
+                    focusStudyTool(.flashcards)
+                }
+                quickAction("Practice", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "brain.head.profile") {
+                    focusStudyTool(.quizGenerator)
+                }
+                quickAction("Open Map", tint: Color(red: 0.27, green: 0.43, blue: 0.55), icon: "point.3.connected.trianglepath.dotted") {
+                    focusStudyTool(.keyConcepts)
+                }
+            }
+
             if prep.likelyTopics.isEmpty {
                 emptyCompactState(title: "No exam prep yet", message: "Generate exam prep to build likely topics, revision notes, and practice questions from the note.")
             } else {
@@ -918,7 +984,7 @@ private extension StudyView {
                             }
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white.opacity(0.72))
+                            .background(Color.studySurface)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                     }
@@ -939,6 +1005,18 @@ private extension StudyView {
         )
 
         return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                quickAction("Explore", tint: Color(red: 0.27, green: 0.43, blue: 0.55), icon: "magnifyingglass") {
+                    focusStudyTool(.keyConcepts)
+                }
+                quickAction("Compare", tint: Color(red: 0.73, green: 0.35, blue: 0.33), icon: "scale.3d") {
+                    onCompareConcepts()
+                }
+                quickAction("Practice", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "brain.head.profile") {
+                    focusStudyTool(.quizGenerator)
+                }
+            }
+
             if map.isEmpty {
                 emptyCompactState(title: "No concept map yet", message: "Generate a concept map to see the note as a relationship tree.")
             } else {
@@ -984,10 +1062,22 @@ private extension StudyView {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .background(Color.white.opacity(0.8))
+                            .background(Color.studySurface)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                }
+
+                HStack(spacing: 8) {
+                quickAction("Open Graph", tint: Color(red: 0.27, green: 0.43, blue: 0.55), icon: "circle.grid.2x2") {
+                        focusStudyTool(.keyConcepts)
+                    }
+                    quickAction("Review", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "arrow.counterclockwise") {
+                        focusStudyTool(.flashcards)
+                    }
+                    quickAction("Generate Quiz", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "checklist") {
+                        focusStudyTool(.quizGenerator)
+                    }
                 }
 
                 KnowledgeGraphView(noteID: noteID, noteTitle: noteLabel)
@@ -1006,6 +1096,18 @@ private extension StudyView {
         )
 
         return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                quickAction("Practice", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "brain.head.profile") {
+                    isActiveRecallAnswerRevealed = false
+                }
+                quickAction("Generate Quiz", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "checklist") {
+                    focusStudyTool(.quizGenerator)
+                }
+                quickAction("Review", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "book.pages") {
+                    focusStudyTool(.flashcards)
+                }
+            }
+
             if let prompt {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(prompt.prompt)
@@ -1021,7 +1123,7 @@ private extension StudyView {
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.8))
+                                .background(Color.studySurface)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -1062,7 +1164,7 @@ private extension StudyView {
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.8))
+                                .background(Color.studySurface)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -1071,7 +1173,7 @@ private extension StudyView {
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.72))
+                .background(Color.studySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else {
                 emptyCompactState(title: "No active recall prompts", message: "Generate active recall prompts from the note to practice mentally before revealing the answer.")
@@ -1092,6 +1194,18 @@ private extension StudyView {
             HStack(spacing: 8) {
                 statPill(title: "Current Streak", value: "\(studyData.streaks.currentStreak) days")
                 statPill(title: "Memory Items", value: "\(studyData.learningMemory.count)")
+            }
+
+            HStack(spacing: 8) {
+                quickAction("Review Deck", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "rectangle.stack") {
+                    focusStudyTool(.flashcards)
+                }
+                quickAction("Plan Session", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "calendar") {
+                    focusStudyTool(.quizGenerator)
+                }
+                quickAction("Open Insights", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "chart.line.uptrend.xyaxis") {
+                    focusStudyTool(.learningInsights)
+                }
             }
         }
     }
@@ -1146,7 +1260,7 @@ private extension StudyView {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.72))
+            .background(Color.studySurface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         )
     }
@@ -1276,8 +1390,7 @@ private extension StudyView {
 
     func shuffleFlashcards() {
         guard !studyData.flashcards.isEmpty else { return }
-        flashcardIndex = 0
-        isFlashcardFlipped = false
+        resetFlashcardSession()
         let shuffled = studyData.flashcards.shuffled()
         mutateStudyData { studyData in
             studyData.flashcards = shuffled
@@ -1600,6 +1713,41 @@ private extension StudyView {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if clean.count <= 120 { return clean }
         return String(clean.prefix(117)) + "..."
+    }
+
+    func stripCitationMarkers(_ text: String) -> String {
+        let cleaned = text
+            .replacingOccurrences(of: #"\[\d+\]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: "Generated:", with: "", options: [.caseInsensitive, .diacriticInsensitive])
+            .replacingOccurrences(of: "Summary:", with: "", options: [.caseInsensitive, .diacriticInsensitive])
+            .replacingOccurrences(of: "Question:", with: "", options: [.caseInsensitive, .diacriticInsensitive])
+            .replacingOccurrences(of: "Answer:", with: "", options: [.caseInsensitive, .diacriticInsensitive])
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func bestSentence(for concept: String, in sentences: [String]) -> String? {
+        let normalized = normalizeConceptKey(concept)
+        return sentences.first(where: { normalizeConceptKey($0).contains(normalized) })
+            ?? sentences.first(where: { $0.lowercased().contains(concept.lowercased()) })
+    }
+
+    func quizExplanation(from sentence: String, concept: String) -> String {
+        let cleaned = stripCitationMarkers(sentence)
+        let lower = cleaned.lowercased()
+        if let range = lower.range(of: concept.lowercased()) {
+            let tail = cleaned[range.upperBound...]
+            let answer = stripRecallPrefixes(String(tail))
+            if !answer.isEmpty {
+                return answer
+            }
+        }
+        return sentenceFragment(cleaned)
+    }
+
+    func quizShortAnswer(from sentence: String, concept: String) -> String {
+        let cleaned = stripCitationMarkers(sentence)
+        let answer = stripRecallPrefixes(cleaned)
+        return answer.isEmpty ? displayConcept(concept) : answer
     }
 
     func condensedAnswer(from sentence: String, for concept: String) -> String {
@@ -2298,7 +2446,7 @@ private enum StudySummaryMode: String, CaseIterable, Identifiable {
     }
 }
 
-private enum SupplementalStudySection: String, CaseIterable, Identifiable {
+enum SupplementalStudySection: String, CaseIterable, Identifiable {
     case learningMemory = "Learning Memory"
     case knowledgeGaps = "Knowledge Gaps"
     case examPrep = "Exam Prep"
@@ -2337,12 +2485,14 @@ struct StudyView: View {
     let lastUpdatedAt: Date?
     let noteHasContent: Bool
     let studyData: NoteStudyData
+    let autoGenerateStudyMaterialsRequestID: UUID?
     let isGenerating: Bool
     let generationStatus: String
     let generationSummary: String?
     let statusMessage: String?
     let statusTone: StudyStatusTone
     let onGenerateMaterials: () -> Void
+    let onAutoGenerateStudyMaterialsConsumed: () -> Void
     let onClose: () -> Void
     let onExplainSimply: () -> Void
     let onGiveExample: () -> Void
@@ -2356,16 +2506,32 @@ struct StudyView: View {
     @Binding var panelWidth: CGFloat
 
     @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var knowledgeGraphManager = KnowledgeGraphManager.shared
     @State private var selectedTool: StudyTool = .learningInsights
     @State private var panelLastDragX: CGFloat?
     @State private var flashcardIndex: Int = 0
     @State private var isFlashcardFlipped: Bool = false
+    @State private var isFlashcardInteractionLocked: Bool = false
     @State private var activeRecallIndex: Int = 0
     @State private var isActiveRecallAnswerRevealed: Bool = false
     @State private var selectedSummaryMode: StudySummaryMode = .executive
-    @State private var expandedSupplementalSection: SupplementalStudySection = .learningMemory
+    @State private var activeSupplementalSection: SupplementalStudySection?
     @State private var transientStatusMessage: String?
+    @State private var studyScrollContentHeight: CGFloat = 0
+    @State private var studyScrollViewportHeight: CGFloat = 0
+    static let outerChromePadding: CGFloat = 0
+    static let outerChromeCornerRadius: CGFloat = 0
+    static func studyScrollBottomPadding(hasOverflow: Bool) -> CGFloat {
+        hasOverflow ? 180 : 72
+    }
+
+    static func toggledSupplementalSection(
+        activeSection: SupplementalStudySection?,
+        section: SupplementalStudySection
+    ) -> SupplementalStudySection? {
+        activeSection == section ? nil : section
+    }
 
     private var noteLabel: String {
         noteTitle.isEmpty ? "Untitled Note" : noteTitle
@@ -2432,53 +2598,111 @@ struct StudyView: View {
     private var backgroundGradient: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.98, green: 0.98, blue: 0.99),
-                Color(red: 0.96, green: 0.97, blue: 0.98),
-                Color(red: 0.95, green: 0.95, blue: 0.97)
+                Color.studySurfaceRaised,
+                Color.studySurface,
+                Color.studySurfaceMuted
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
     }
 
+    static func verticalOverflowAffordanceVisible(contentHeight: CGFloat, viewportHeight: CGFloat) -> Bool {
+        contentHeight > viewportHeight + 1
+    }
+
     var body: some View {
-        ZStack(alignment: .leading) {
-            backgroundGradient
+        GeometryReader { _ in
+            let hasOverflow = Self.verticalOverflowAffordanceVisible(
+                contentHeight: studyScrollContentHeight,
+                viewportHeight: studyScrollViewportHeight
+            )
 
-            VStack(spacing: 0) {
-                headerCard
+            ZStack(alignment: .leading) {
+                backgroundGradient
 
-                Divider()
-                    .opacity(0.08)
+                VStack(spacing: 0) {
+                    headerCard
 
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(StudyTool.allCases) { tool in
-                            toolSection(for: tool)
+                    Divider()
+                        .opacity(0.08)
+
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(StudyTool.allCases) { tool in
+                                toolSection(for: tool)
+                            }
+
+                            ForEach(SupplementalStudySection.allCases) { section in
+                                supplementalSection(for: section)
+                            }
+
+                            Color.clear
+                                .frame(height: Self.studyScrollBottomPadding(hasOverflow: hasOverflow))
                         }
-
-                        ForEach(SupplementalStudySection.allCases) { section in
-                            supplementalSection(for: section)
+                        .padding(18)
+                        .padding(.bottom, Self.studyScrollBottomPadding(hasOverflow: hasOverflow))
+                        .background(
+                            GeometryReader { contentProxy in
+                                Color.clear
+                                    .onAppear {
+                                        studyScrollContentHeight = contentProxy.size.height
+                                    }
+                                    .onChange(of: contentProxy.size.height) { _, newValue in
+                                        studyScrollContentHeight = newValue
+                                    }
+                            }
+                        )
+                    }
+                    .background(
+                        GeometryReader { viewportProxy in
+                            Color.clear
+                                .onAppear {
+                                    studyScrollViewportHeight = viewportProxy.size.height
+                                }
+                                .onChange(of: viewportProxy.size.height) { _, newValue in
+                                    studyScrollViewportHeight = newValue
+                                }
+                        }
+                    )
+                    .scrollIndicators(.hidden)
+                    .overlay(alignment: .bottom) {
+                        if hasOverflow {
+                            LinearGradient(
+                                colors: [
+                                    Color.clear,
+                                    Color.bgEditor.opacity(0.04),
+                                    Color.bgEditor.opacity(0.24)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 42)
+                            .allowsHitTesting(false)
                         }
                     }
-                    .padding(18)
-                    .padding(.bottom, 20)
+                    .onChange(of: noteID) { _, _ in
+                        resetFlashcardSession()
+                        isFlashcardInteractionLocked = false
+                    }
+                    .onChange(of: studyData.flashcards.map(\.id)) { _, _ in
+                        syncFlashcardSession()
+                    }
                 }
-                .scrollIndicators(.hidden)
-            }
 
-            resizeGrip
+                resizeGrip
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color.bgEditor)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.bgPrimary.opacity(0.92))
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.12), radius: 28, x: -10, y: 12)
         .animation(.spring(response: 0.26, dampingFraction: 0.92), value: selectedTool)
         .animation(.spring(response: 0.26, dampingFraction: 0.92), value: panelWidth)
+        .task(id: autoGenerateStudyMaterialsRequestID) {
+            guard autoGenerateStudyMaterialsRequestID != nil else { return }
+            guard noteHasContent, noteID != nil else { return }
+            generateAllStudyMaterials()
+            onAutoGenerateStudyMaterialsConsumed()
+        }
     }
 
     private var resizeGrip: some View {
@@ -2514,7 +2738,7 @@ struct StudyView: View {
             )
             .overlay(alignment: .leading) {
                 Capsule()
-                    .fill(Color.black.opacity(0.08))
+                    .fill(Color.studyBorderSoft)
                     .frame(width: 4, height: 52)
                     .padding(.leading, 4)
             }
@@ -2546,7 +2770,7 @@ struct StudyView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Color.textSecondary)
                             .frame(width: 28, height: 28)
-                            .background(Color.white.opacity(0.8))
+                            .background(Color.studySurface)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -2609,14 +2833,14 @@ struct StudyView: View {
         .padding(18)
         .background(
             LinearGradient(
-                colors: [Color.white.opacity(0.92), Color.white.opacity(0.76)],
+                colors: [Color.studySurfaceRaised, Color.studySurface],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 14, x: 0, y: 8)
@@ -2665,7 +2889,7 @@ struct StudyView: View {
             .background(
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(0.94),
+                        Color.studySurfaceRaised,
                         toolTint(tool).opacity(0.07)
                     ],
                     startPoint: .topLeading,
@@ -2675,7 +2899,7 @@ struct StudyView: View {
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(isSelected ? toolTint(tool).opacity(0.34) : Color.black.opacity(0.05), lineWidth: 1)
+                    .stroke(isSelected ? toolTint(tool).opacity(0.34) : Color.studyBorderSoft, lineWidth: 1)
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -2719,10 +2943,10 @@ struct StudyView: View {
             }
         }
         .padding(16)
-        .background(Color.white.opacity(0.80))
+        .background(Color.studySurface)
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
@@ -2790,6 +3014,14 @@ struct StudyView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             statRow(title: "Flashcards Available", value: "\(cards.count)")
+            statRow(title: "Reviewed", value: "\(studyData.progress.flashcardsReviewed)")
+
+            if !cards.isEmpty {
+                ProgressView(value: Self.flashcardProgressValue(currentIndex: flashcardIndex, cardCount: cards.count))
+                    .tint(card?.type.tint ?? Color(red: 0.31, green: 0.56, blue: 0.38))
+                    .accessibilityLabel("Flashcard progress")
+                    .accessibilityValue(Self.flashcardProgressLabel(currentIndex: flashcardIndex, cardCount: cards.count))
+            }
 
             if cards.isEmpty {
                 emptyCompactState(
@@ -2798,71 +3030,51 @@ struct StudyView: View {
                 )
             } else if let card {
                 VStack(alignment: .leading, spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.96),
-                                        card.type.tint.opacity(0.10)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(height: 168)
-                            .shadow(color: .black.opacity(0.04), radius: 12, x: 0, y: 6)
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text(card.type.title)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(card.type.tint)
-                                Spacer()
-                                Text("\(flashcardIndex + 1)/\(cards.count)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Text(isFlashcardFlipped ? card.back : card.front)
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            if !card.whyItMatters.isEmpty {
-                                Text(card.whyItMatters)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(18)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .rotation3DEffect(.degrees(isFlashcardFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
-                    }
+                    flashcardFlipCard(card: card, indexText: "\(flashcardIndex + 1)/\(cards.count)")
                     .contentShape(Rectangle())
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(cardAccessibilityLabel(for: card))
+                    .accessibilityHint("Tap to flip the card.")
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {
-                            isFlashcardFlipped.toggle()
+                        performFlashcardAction {
+                            if reduceMotion {
+                                isFlashcardFlipped.toggle()
+                            } else {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {
+                                    isFlashcardFlipped.toggle()
+                                }
+                            }
                         }
                     }
 
                     HStack(spacing: 8) {
                         Button {
-                            flashcardIndex = max(0, flashcardIndex - 1)
-                            isFlashcardFlipped = false
+                            performFlashcardAction {
+                                flashcardIndex = Self.previousFlashcardIndex(currentIndex: flashcardIndex, cardCount: cards.count)
+                                isFlashcardFlipped = false
+                            }
                         } label: {
                             Text("Previous")
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.78))
+                                .background(Color.studySurface)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
-                        .disabled(flashcardIndex == 0)
+                        .keyboardShortcut(.leftArrow, modifiers: [])
+                        .disabled(isFlashcardInteractionLocked || flashcardIndex == 0)
 
                         Button {
-                            isFlashcardFlipped.toggle()
+                            performFlashcardAction {
+                                if reduceMotion {
+                                    isFlashcardFlipped.toggle()
+                                } else {
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {
+                                        isFlashcardFlipped.toggle()
+                                    }
+                                }
+                            }
                         } label: {
                             Text(isFlashcardFlipped ? "Show Front" : "Flip")
                                 .font(.caption.weight(.semibold))
@@ -2873,37 +3085,49 @@ struct StudyView: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .keyboardShortcut(.space, modifiers: [])
+                        .keyboardShortcut(.return, modifiers: [])
+                        .disabled(isFlashcardInteractionLocked)
 
                         Button {
-                            flashcardIndex = min(cards.count - 1, flashcardIndex + 1)
-                            isFlashcardFlipped = false
+                            performFlashcardAction {
+                                flashcardIndex = Self.nextFlashcardIndex(currentIndex: flashcardIndex, cardCount: cards.count)
+                                isFlashcardFlipped = false
+                            }
                         } label: {
                             Text("Next")
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.78))
+                                .background(Color.studySurface)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
-                        .disabled(flashcardIndex >= cards.count - 1)
+                        .keyboardShortcut(.rightArrow, modifiers: [])
+                        .disabled(isFlashcardInteractionLocked || flashcardIndex >= cards.count - 1)
 
                         Button {
-                            shuffleFlashcards()
+                            performFlashcardAction {
+                                shuffleFlashcards()
+                            }
                         } label: {
                             Text("Shuffle")
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.78))
+                                .background(Color.studySurface)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .disabled(isFlashcardInteractionLocked)
+                        .keyboardShortcut("s", modifiers: [.command, .shift])
 
                         Spacer()
 
                         Button {
-                            copyToPasteboard(flashcardCardText(card))
+                            performFlashcardAction {
+                                copyToPasteboard(flashcardCardText(card))
+                            }
                         } label: {
                             Text("Copy Card")
                                 .font(.caption.weight(.semibold))
@@ -2914,9 +3138,13 @@ struct StudyView: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .disabled(isFlashcardInteractionLocked)
+                        .keyboardShortcut("c", modifiers: [.command, .shift])
 
                         Button {
-                            insertGeneratedContent(flashcardCardText(card))
+                            performFlashcardAction {
+                                insertGeneratedContent(flashcardCardText(card))
+                            }
                         } label: {
                             Text("Insert Card")
                                 .font(.caption.weight(.semibold))
@@ -2927,17 +3155,166 @@ struct StudyView: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .disabled(isFlashcardInteractionLocked)
+                        .keyboardShortcut("i", modifiers: [.command, .shift])
+
+                        Button {
+                            performFlashcardAction {
+                                onMarkFlashcardReviewed(card)
+                                transientStatusMessage = "Marked flashcard as reviewed."
+                            }
+                        } label: {
+                            Text("Mark Reviewed")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(Color(red: 0.31, green: 0.56, blue: 0.38))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isFlashcardInteractionLocked)
+                        .keyboardShortcut("r", modifiers: [.command, .shift])
                     }
 
                     actionButtons(
                         artifact: artifact,
                         accent: card.type.tint,
-                        onRegenerate: { generateFlashcards() },
+                        onRegenerate: { performFlashcardAction { generateFlashcards() } },
                         includeExport: true
                     )
+                    .disabled(isFlashcardInteractionLocked)
                 }
             }
         }
+    }
+
+    private func performFlashcardAction(_ action: () -> Void) {
+        guard !isFlashcardInteractionLocked else { return }
+        isFlashcardInteractionLocked = true
+        action()
+
+        Task { @MainActor in
+            let delay = reduceMotion ? UInt64(90_000_000) : UInt64(260_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            isFlashcardInteractionLocked = false
+        }
+    }
+
+    private func resetFlashcardSession() {
+        flashcardIndex = 0
+        isFlashcardFlipped = false
+    }
+
+    private func syncFlashcardSession() {
+        let cardCount = studyData.flashcards.count
+        guard cardCount > 0 else {
+            resetFlashcardSession()
+            isFlashcardInteractionLocked = false
+            return
+        }
+
+        flashcardIndex = min(flashcardIndex, cardCount - 1)
+        isFlashcardFlipped = false
+        isFlashcardInteractionLocked = false
+    }
+
+    private func cardAccessibilityLabel(for card: StudyFlashcard) -> String {
+        let side = Self.flashcardFace(for: isFlashcardFlipped)
+        return "\(card.type.title) flashcard, \(side == .front ? "front" : "back") side. \(side == .front ? card.front : card.back)"
+    }
+
+    private func flashcardFace(card: StudyFlashcard, side: StudyFlashcardFace, indexText: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(card.type.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(card.type.tint)
+                Spacer()
+                Text(indexText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(side == .front ? card.front : card.back)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if side == .front, !card.whyItMatters.isEmpty {
+                Text(card.whyItMatters)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func flashcardFlipCard(card: StudyFlashcard, indexText: String) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.studySurfaceRaised,
+                            card.type.tint.opacity(0.10)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(height: 168)
+                .shadow(color: .black.opacity(0.04), radius: 12, x: 0, y: 6)
+
+            Group {
+                if isFlashcardFlipped {
+                    flashcardFace(card: card, side: .back, indexText: indexText)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                } else {
+                    flashcardFace(card: card, side: .front, indexText: indexText)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+            }
+        }
+        .animation(.spring(response: 0.25, dampingFraction: 0.88), value: isFlashcardFlipped)
+    }
+
+    static func previousFlashcardIndex(currentIndex: Int, cardCount: Int) -> Int {
+        guard cardCount > 0 else { return 0 }
+        return max(0, min(currentIndex, cardCount - 1) - 1)
+    }
+
+    static func nextFlashcardIndex(currentIndex: Int, cardCount: Int) -> Int {
+        guard cardCount > 0 else { return 0 }
+        return min(cardCount - 1, max(0, currentIndex) + 1)
+    }
+
+    static func flashcardProgressValue(currentIndex: Int, cardCount: Int) -> Double {
+        guard cardCount > 0 else { return 0 }
+        return Double(min(currentIndex + 1, cardCount)) / Double(cardCount)
+    }
+
+    static func flashcardProgressLabel(currentIndex: Int, cardCount: Int) -> String {
+        guard cardCount > 0 else { return "0 of 0 cards" }
+        let current = min(currentIndex + 1, cardCount)
+        return "\(current) of \(cardCount) cards"
+    }
+
+    static func flashcardFace(for isFlipped: Bool) -> StudyFlashcardFace {
+        isFlipped ? .back : .front
+    }
+
+    static func flashcardControlsDisabled(cardCount: Int, isLocked: Bool) -> Bool {
+        isLocked || cardCount == 0
+    }
+
+    static func flashcardSessionCompleted(currentIndex: Int, cardCount: Int) -> Bool {
+        cardCount > 0 && currentIndex >= cardCount - 1
+    }
+
+    static func flashcardDeckChanged(previousIDs: [UUID], currentIDs: [UUID]) -> Bool {
+        previousIDs != currentIDs
     }
 
     private var quizDetail: some View {
@@ -2993,7 +3370,7 @@ struct StudyView: View {
                             .foregroundStyle(selectedSummaryMode == mode ? .white : Color.textSecondary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .background(selectedSummaryMode == mode ? Color(red: 0.54, green: 0.38, blue: 0.61) : Color.white.opacity(0.75))
+                            .background(selectedSummaryMode == mode ? Color(red: 0.54, green: 0.38, blue: 0.61) : Color.studySurface)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -3046,20 +3423,6 @@ struct StudyView: View {
         let content = artifact.content
         return HStack(spacing: 8) {
             Button {
-                insertGeneratedContent(content)
-            } label: {
-                Text("Insert")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(accent)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-            Button {
                 copyToPasteboard(content)
             } label: {
                 Text("Copy")
@@ -3067,24 +3430,12 @@ struct StudyView: View {
                     .foregroundStyle(accent)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(accent.opacity(0.12))
+                    .background(Color.studySurfaceRaised)
                     .clipShape(Capsule())
+                    .overlay(Capsule().stroke(accent.opacity(0.22), lineWidth: 0.8))
             }
             .buttonStyle(.plain)
             .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-            Button {
-                saveArtifact(artifact)
-            } label: {
-                Text("Save")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.75))
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
 
             if includeExport {
                 Button {
@@ -3095,8 +3446,9 @@ struct StudyView: View {
                         .foregroundStyle(Color(red: 0.54, green: 0.38, blue: 0.61))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
-                        .background(Color(red: 0.54, green: 0.38, blue: 0.61).opacity(0.12))
+                        .background(Color.studySurfaceRaised)
                         .clipShape(Capsule())
+                        .overlay(Capsule().stroke(Color(red: 0.54, green: 0.38, blue: 0.61).opacity(0.20), lineWidth: 0.8))
                 }
                 .buttonStyle(.plain)
             }
@@ -3110,11 +3462,41 @@ struct StudyView: View {
                         .foregroundStyle(accent)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
-                        .background(accent.opacity(0.12))
+                        .background(Color.studySurfaceRaised)
                         .clipShape(Capsule())
+                        .overlay(Capsule().stroke(accent.opacity(0.18), lineWidth: 0.8))
                 }
                 .buttonStyle(.plain)
             }
+
+            Button {
+                saveArtifact(artifact)
+            } label: {
+                Text("Save")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.studySurface)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.borderSubtle, lineWidth: 0.8))
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                insertGeneratedContent(content)
+            } label: {
+                Text("Add to Note")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.studySurfaceRaised)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(accent.opacity(0.18), lineWidth: 0.8))
+            }
+            .buttonStyle(.plain)
+            .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -3147,7 +3529,7 @@ struct StudyView: View {
             actionButtons(artifact: artifact, accent: accent, onRegenerate: onRegenerate)
         }
         .padding(14)
-        .background(Color.white.opacity(0.70))
+        .background(Color.studySurface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -3158,23 +3540,41 @@ struct StudyView: View {
         }
     }
 
-    private func quickAction(_ title: String, _ action: @escaping () -> Void) -> some View {
+    private func quickAction(_ title: String, tint: Color = Color.textSecondary, icon: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(Color.white.opacity(0.75))
-                .clipShape(Capsule())
+            HStack(spacing: 6) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(title)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(tint.opacity(0.08))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(tint.opacity(0.14), lineWidth: 0.8)
+            )
         }
         .buttonStyle(.plain)
+    }
+
+    private func focusStudyTool(_ tool: StudyTool) {
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) {
+            selectedTool = tool
+        }
     }
 
     private func scoreRing(score: Double) -> some View {
         ZStack {
             Circle()
-                .stroke(Color.black.opacity(0.08), lineWidth: 10)
+                .stroke(Color.studyBorderSoft, lineWidth: 10)
             Circle()
                 .trim(from: 0, to: score.clamped(to: 0...1))
                 .stroke(
@@ -3205,7 +3605,7 @@ struct StudyView: View {
                 .font(.subheadline.weight(.semibold))
         }
         .padding(12)
-        .background(Color.white.opacity(0.68))
+        .background(Color.studySurface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
@@ -3222,7 +3622,7 @@ struct StudyView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.78))
+        .background(Color.studySurface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -3237,13 +3637,19 @@ struct StudyView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
                 ForEach(items, id: \.self) { item in
                     Text(item)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(tint)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(tint.opacity(0.12))
-                        .clipShape(Capsule())
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(tint.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(tint.opacity(0.14), lineWidth: 0.8)
+                        )
                 }
             }
         }
@@ -3260,7 +3666,7 @@ struct StudyView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.68))
+        .background(Color.studySurface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 

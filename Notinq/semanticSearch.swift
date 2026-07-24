@@ -14,11 +14,9 @@ func semanticSearch(queryEmbedding: [Float], notes: [EmbeddedNote]) -> [SearchRe
         }
         .sorted { $0.1 > $1.1 }
         .prefix(10)
-        .map {
-            SearchResult(
-                title: "Semantic Result",
-                preview: $0.0.text,
-                content: $0.0.text
-            )
+        .compactMap { item in
+            let note = NoteFile(title: "Semantic Result", content: item.0.text)
+            let folder = NoteFolder(title: "Semantic Search", notes: [note])
+            return SearchResult(folder: folder, note: note, query: "")
         }
 }

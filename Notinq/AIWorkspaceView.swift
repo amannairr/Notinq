@@ -79,7 +79,7 @@ struct AIWorkspaceView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.borderSubtle, lineWidth: 0.8)
         )
     }
 
@@ -139,7 +139,7 @@ struct AIWorkspaceView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.borderSubtle, lineWidth: 0.8)
         )
     }
 
@@ -185,7 +185,7 @@ struct AIWorkspaceView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.borderSubtle, lineWidth: 0.8)
         )
     }
 
@@ -258,7 +258,7 @@ struct AIWorkspaceView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.borderSubtle, lineWidth: 0.8)
         )
     }
 
@@ -290,7 +290,7 @@ struct AIWorkspaceView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
-            .background(Color.white.opacity(0.62))
+            .background(Color.bgElevated)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .padding(18)
@@ -298,7 +298,7 @@ struct AIWorkspaceView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.borderSubtle, lineWidth: 0.8)
         )
     }
 
@@ -306,20 +306,37 @@ struct AIWorkspaceView: View {
         HStack {
             if message.role == .assistant { Spacer(minLength: 0) }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(message.role == .user ? "You" : "Assistant")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(message.role == .user ? Color.white.opacity(0.85) : Color(red: 0.22, green: 0.44, blue: 0.58))
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(message.role == .user ? "You" : "Assistant")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(message.role == .user ? Color.white.opacity(0.9) : Color.textSecondary)
 
-                Text(message.text)
+                    Text(message.timestamp.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(message.role == .user ? Color.white.opacity(0.7) : Color.textTertiary)
+                }
+
+                renderedMessageText(message.text)
                     .font(.body)
                     .foregroundStyle(message.role == .user ? Color.white : Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(4)
             }
-            .padding(14)
-            .frame(maxWidth: 560, alignment: .leading)
-            .background(message.role == .user ? Color(red: 0.20, green: 0.40, blue: 0.56) : Color.white.opacity(0.86))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(16)
+            .frame(maxWidth: 620, alignment: .leading)
+            .background {
+                if message.role == .user {
+                    userBubbleBackground
+                } else {
+                    assistantBubbleBackground
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(message.role == .user ? Color.white.opacity(0.08) : Color.borderSubtle, lineWidth: 0.6)
+            )
 
             if message.role == .user { Spacer(minLength: 0) }
         }
@@ -360,7 +377,7 @@ struct AIWorkspaceView: View {
             .padding(14)
             .background(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.92), tint.opacity(0.08)],
+                    colors: [Color.bgElevated, tint.opacity(0.10)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -368,7 +385,7 @@ struct AIWorkspaceView: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                    .stroke(Color.borderSubtle, lineWidth: 0.8)
             )
         }
         .buttonStyle(.plain)
@@ -446,7 +463,7 @@ struct AIWorkspaceView: View {
                 .multilineTextAlignment(.trailing)
         }
         .padding(12)
-        .background(Color.white.opacity(0.62))
+        .background(Color.bgElevated)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -478,9 +495,9 @@ struct AIWorkspaceView: View {
     private var backgroundGradient: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.95, green: 0.96, blue: 0.98),
-                Color(red: 0.92, green: 0.94, blue: 0.96),
-                Color(red: 0.96, green: 0.93, blue: 0.90)
+                Color.bgEditor.opacity(0.96),
+                Color.bgPrimary.opacity(0.98),
+                Color.bgEditor.opacity(0.92)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -489,7 +506,31 @@ struct AIWorkspaceView: View {
 
     private var glassSurface: some View {
         Color.bgElevated
-            .shadow(color: .black.opacity(0.06), radius: 16, x: 0, y: 8)
+            .shadow(color: .black.opacity(0.08), radius: 16, x: 0, y: 8)
+    }
+
+    private var userBubbleBackground: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.20, green: 0.40, blue: 0.56),
+                Color(red: 0.18, green: 0.48, blue: 0.54)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var assistantBubbleBackground: some View {
+        Color.bgElevated
+    }
+
+    @ViewBuilder
+    private func renderedMessageText(_ text: String) -> some View {
+        if let attributed = text.markdownAttributedString() {
+            Text(attributed)
+        } else {
+            Text(text)
+        }
     }
 }
 

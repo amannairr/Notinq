@@ -12,7 +12,7 @@ struct ConceptCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(concept.name)
                         .font(.headline)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(Color.textPrimary)
                     Spacer(minLength: 8)
                     Text("\(relationshipCount)")
                         .font(.caption.weight(.semibold))
@@ -22,7 +22,7 @@ struct ConceptCard: View {
                 if !concept.description.isEmpty {
                     Text(concept.description)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.textSecondary)
                         .lineLimit(3)
                 }
 
@@ -35,14 +35,14 @@ struct ConceptCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.96), Color.accentColor.opacity(0.07)],
+                    colors: [Color.graphSurfaceRaised, Color.accentColor.opacity(0.07)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                    .stroke(Color.graphBorderSoft, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
@@ -58,7 +58,7 @@ struct ConceptCard: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(Color.black.opacity(0.04))
+        .background(Color.graphSurfaceMuted)
         .clipShape(Capsule())
     }
 }
@@ -95,7 +95,7 @@ struct KnowledgeGraphView: View {
                         .font(.title3.weight(.bold))
                     Text(noteTitle)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.textSecondary)
                 }
 
                 Spacer()
@@ -107,14 +107,14 @@ struct KnowledgeGraphView: View {
                         Text("Updating")
                             .font(.caption.weight(.semibold))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
                 }
             }
 
             if let message = manager.generationStateByNoteID[noteID]?.message, !message.isEmpty {
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
             }
 
             if concepts.isEmpty {
@@ -122,11 +122,11 @@ struct KnowledgeGraphView: View {
             } else {
                 graphCanvas
                     .frame(height: 320)
-                    .background(Color.white.opacity(0.72))
+                    .background(Color.graphSurfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                            .stroke(Color.graphBorderSoft, lineWidth: 1)
                     )
 
                 if let selectedConcept {
@@ -169,7 +169,7 @@ struct KnowledgeGraphView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.72))
+        .background(Color.graphSurfaceRaised)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
@@ -207,11 +207,11 @@ struct KnowledgeGraphView: View {
                                 .foregroundStyle(selected ? .white : Color.textPrimary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
-                                .background(selected ? Color.accentColor : Color.white.opacity(0.95))
+                                .background(selected ? Color.accentColor : Color.graphSurfaceRaised)
                                 .clipShape(Capsule())
                                 .overlay(
                                     Capsule()
-                                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                                        .stroke(Color.graphBorderSoft, lineWidth: 1)
                                 )
                         }
                         .buttonStyle(.plain)
@@ -235,7 +235,7 @@ struct KnowledgeGraphView: View {
                         .font(.headline)
                     Text(concept.description)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.textSecondary)
                 }
                 Spacer()
             }
@@ -258,11 +258,11 @@ struct KnowledgeGraphView: View {
             }
         }
         .padding(16)
-        .background(Color.white.opacity(0.76))
+        .background(Color.graphSurfaceRaised)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.graphBorderSoft, lineWidth: 1)
         )
     }
 
@@ -276,7 +276,7 @@ struct KnowledgeGraphView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.04))
+        .background(Color.graphSurfaceMuted)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 

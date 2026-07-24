@@ -1,5 +1,6 @@
 import Foundation
 import NaturalLanguage
+import Combine
 
 enum LectureContentSourceKind: String, Codable, CaseIterable, Identifiable {
     case transcript
@@ -78,6 +79,112 @@ struct LectureAnalysisInput: Codable, Equatable {
 
     var hasAnyContent: Bool {
         hasLectureSources || hasStudentNotes
+    }
+}
+
+enum LearningInsightsAnalysisPhase: Equatable {
+    case idle
+    case loading
+    case ready
+    case empty
+    case failure(String)
+
+    var isLoading: Bool {
+        if case .loading = self { return true }
+        return false
+    }
+
+    var canRetry: Bool {
+        if case .failure = self { return true }
+        return false
+    }
+
+    var statusText: String {
+        switch self {
+        case .idle:
+            return "Add a transcript or slide notes, then run the analysis."
+        case .loading:
+            return "Analyzing lecture sources..."
+        case .ready:
+            return "Analysis updated."
+        case .empty:
+            return "No lecture concepts were identified."
+        case .failure(let message):
+            return message
+        }
+    }
+}
+
+enum LearningInsightsPreviewMode: String, CaseIterable, Identifiable {
+    case explanation
+    case flashcards
+    case quiz
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .explanation:
+            return "Explanation"
+        case .flashcards:
+            return "Flashcards"
+        case .quiz:
+            return "Quiz"
+        }
+    }
+}
+
+enum LearningInsightsAction: String, CaseIterable, Identifiable {
+    case analyze
+    case explanation
+    case flashcards
+    case quiz
+    case insert
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .analyze:
+            return "Analyze Lecture"
+        case .explanation:
+            return "Generate Explanation"
+        case .flashcards:
+            return "Create Flashcards"
+        case .quiz:
+            return "Create Quiz Questions"
+        case .insert:
+            return "Insert Into Note"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .analyze:
+            return "Analyze lecture sources"
+        case .explanation:
+            return "Generate explanation"
+        case .flashcards:
+            return "Create flashcards"
+        case .quiz:
+            return "Create quiz questions"
+        case .insert:
+            return "Insert generated content into note"
+        }
+    }
+}
+
+enum LearningInsightsButtonAvailability {
+    static func canAnalyze(isAnalyzing: Bool, hasSourceText: Bool) -> Bool {
+        hasSourceText && !isAnalyzing
+    }
+
+    static func canGenerate(isAnalyzing: Bool, hasConceptSelection: Bool) -> Bool {
+        hasConceptSelection && !isAnalyzing
+    }
+
+    static func canInsert(isAnalyzing: Bool, hasGeneratedPreview: Bool) -> Bool {
+        hasGeneratedPreview && !isAnalyzing
     }
 }
 
@@ -654,7 +761,7 @@ struct LectureCompletenessAnalyzer {
     private let extractionLayer = LectureConceptExtractionLayer()
     private let comparisonLayer = LectureConceptComparisonLayer()
 
-    private init() {}
+    init() {}
 
     func analyze(input: LectureAnalysisInput) -> LectureCompletenessAnalysis {
         guard input.hasAnyContent else {
@@ -680,6 +787,257 @@ struct LectureCompletenessAnalyzer {
             summary: comparison.summary,
             generatedAt: Date()
         )
+    }
+}
+
+@MainActor
+final class LearningInsightsWorkspaceModel: ObservableObject {
+    @Published var analysis: LectureCompletenessAnalysis?
+    @Published var phase: LearningInsightsAnalysisPhase
+    @Published var selectedConcept: LectureCoverageItem?
+    @Published var previewMode: LearningInsightsPreviewMode
+    @Published var generatedPreview: String
+    @Published var statusMessage: String
+
+    private let onSaveAnalysis: (LectureCompletenessAnalysis) -> Void
+    private let onInsertIntoNote: (String) -> Void
+    private let analyzer: (LectureAnalysisInput) throws -> LectureCompletenessAnalysis
+    private var currentRequestID: UUID?
+    private var noteTitle: String
+    private var studentNotes: String
+
+    init(
+        noteTitle: String,
+        studentNotes: String,
+        initialAnalysis: LectureCompletenessAnalysis?,
+        onSaveAnalysis: @escaping (LectureCompletenessAnalysis) -> Void,
+        onInsertIntoNote: @escaping (String) -> Void,
+        analyzer: ((LectureAnalysisInput) throws -> LectureCompletenessAnalysis)? = nil
+    ) {
+        self.noteTitle = noteTitle
+        self.studentNotes = studentNotes
+        self.onSaveAnalysis = onSaveAnalysis
+        self.onInsertIntoNote = onInsertIntoNote
+        self.analyzer = analyzer ?? { input in
+            LectureCompletenessAnalyzer().analyze(input: input)
+        }
+        analysis = initialAnalysis
+        previewMode = .explanation
+        generatedPreview = ""
+        statusMessage = initialAnalysis?.summary ?? LearningInsightsAnalysisPhase.idle.statusText
+        phase = Self.phase(for: initialAnalysis)
+        syncSelectionIfNeeded(using: initialAnalysis)
+    }
+
+    var hasSelectedConcept: Bool {
+        selectedConcept != nil
+    }
+
+    var hasGeneratedPreview: Bool {
+        !generatedPreview.isEmpty
+    }
+
+    var isAnalyzing: Bool {
+        phase.isLoading
+    }
+
+    var resolvedAnalysis: LectureCompletenessAnalysis? {
+        analysis
+    }
+
+    func updateInitialAnalysis(_ initialAnalysis: LectureCompletenessAnalysis?) {
+        guard analysis == nil else { return }
+        analysis = initialAnalysis
+        phase = Self.phase(for: initialAnalysis)
+        statusMessage = initialAnalysis?.summary ?? phase.statusText
+        syncSelectionIfNeeded(using: initialAnalysis)
+    }
+
+    func analyzeLecture(transcript: String, slides: String) {
+        guard !phase.isLoading else { return }
+
+        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSlides = slides.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTranscript.isEmpty || !trimmedSlides.isEmpty else {
+            phase = .empty
+            statusMessage = "Add a transcript or slide notes, then run the analysis."
+            selectedConcept = nil
+            generatedPreview = ""
+            return
+        }
+
+        let requestID = UUID()
+        currentRequestID = requestID
+        phase = .loading
+        statusMessage = phase.statusText
+
+        let input = LectureAnalysisInput(
+            lectureTitle: noteTitle,
+            noteTitle: noteTitle,
+            studentNotes: studentNotes,
+            sources: [
+                LectureContentSource(kind: .transcript, title: "Transcript", text: trimmedTranscript),
+                LectureContentSource(kind: .slides, title: "Slides", text: trimmedSlides)
+            ]
+        )
+
+        DispatchQueue.global(qos: .userInitiated).async { [analyzer] in
+            do {
+                let result = try analyzer(input)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.currentRequestID == requestID else { return }
+                    self.apply(result: result)
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.currentRequestID == requestID else { return }
+                    self.fail(message: error.localizedDescription.isEmpty ? "The analysis could not be completed." : error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    func retryAnalysis(transcript: String, slides: String) {
+        analyzeLecture(transcript: transcript, slides: slides)
+    }
+
+    func selectConcept(_ concept: LectureCoverageItem, analysis: LectureCompletenessAnalysis?) {
+        selectedConcept = concept
+        generatedPreview = previewText(for: concept, mode: previewMode)
+        if let analysis, selectedConcept?.id == concept.id {
+            statusMessage = analysis.summary
+        }
+    }
+
+    func generatePreview(for concept: LectureCoverageItem, mode: LearningInsightsPreviewMode) {
+        guard !isAnalyzing else { return }
+        previewMode = mode
+        generatedPreview = previewText(for: concept, mode: mode)
+        statusMessage = "Prepared \(mode.title.lowercased()) for \(concept.title)."
+    }
+
+    func insertGeneratedPreview() {
+        guard !generatedPreview.isEmpty, !isAnalyzing else { return }
+        onInsertIntoNote(generatedPreview)
+        statusMessage = "Inserted the generated content into the note."
+    }
+
+    func currentPreviewIsAvailable() -> Bool {
+        !generatedPreview.isEmpty
+    }
+
+    private func apply(result: LectureCompletenessAnalysis) {
+        analysis = result
+        phase = result.hasResults ? .ready : .empty
+        statusMessage = result.hasResults ? result.summary : phase.statusText
+        currentRequestID = nil
+        onSaveAnalysis(result)
+        syncSelectionIfNeeded(using: result)
+    }
+
+    private func fail(message: String) {
+        analysis = nil
+        phase = .failure(message)
+        statusMessage = message
+        currentRequestID = nil
+        selectedConcept = nil
+        generatedPreview = ""
+    }
+
+    private func syncSelectionIfNeeded(using analysis: LectureCompletenessAnalysis?) {
+        guard let analysis else {
+            selectedConcept = nil
+            generatedPreview = ""
+            return
+        }
+
+        let allItems = analysis.missingConcepts + analysis.partiallyCapturedConcepts + analysis.wellCoveredConcepts
+        guard !allItems.isEmpty else {
+            selectedConcept = nil
+            generatedPreview = ""
+            return
+        }
+
+        if let selectedConcept,
+           allItems.contains(where: { $0.id == selectedConcept.id }) {
+            return
+        }
+
+        selectedConcept = allItems.first
+        if let selectedConcept {
+            generatedPreview = previewText(for: selectedConcept, mode: previewMode)
+        }
+    }
+
+    private func previewText(for concept: LectureCoverageItem, mode: LearningInsightsPreviewMode) -> String {
+        switch mode {
+        case .explanation:
+            return [
+                "Definition",
+                concept.shortExplanation,
+                "",
+                "Why it matters",
+                concept.whyItMatters,
+                "",
+                "What to add",
+                concept.suggestedAddition,
+                "",
+                "Where it appears in notes",
+                noteEvidence(for: concept)
+            ]
+            .joined(separator: "\n")
+        case .flashcards:
+            return [
+                "Flashcard 1",
+                "Front: What is \(concept.title)?",
+                "Back: \(concept.shortExplanation)",
+                "",
+                "Flashcard 2",
+                "Front: Why does \(concept.title) matter?",
+                "Back: \(concept.whyItMatters)",
+                "",
+                "Flashcard 3",
+                "Front: What should be added to the note?",
+                "Back: \(concept.suggestedAddition)"
+            ]
+            .joined(separator: "\n")
+        case .quiz:
+            return [
+                "Question 1",
+                "Explain \(concept.title) in one or two sentences.",
+                "",
+                "Question 2",
+                "Why is \(concept.title) important in the lecture?",
+                "",
+                "Question 3",
+                "What detail is still missing from the notes?"
+            ]
+            .joined(separator: "\n")
+        }
+    }
+
+    private func noteEvidence(for concept: LectureCoverageItem) -> String {
+        let trimmed = studentNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "No note evidence yet."
+        }
+
+        let lines = trimmed.components(separatedBy: .newlines)
+        if let match = lines.first(where: { $0.localizedCaseInsensitiveContains(concept.title) }) {
+            return match.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let sentences = trimmed.split(whereSeparator: { ".!?".contains($0) })
+        if let match = sentences.first(where: { $0.localizedCaseInsensitiveContains(concept.title) }) {
+            return match.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return concept.noteSummary.isEmpty ? "The note does not directly mention this concept." : concept.noteSummary
+    }
+
+    private static func phase(for analysis: LectureCompletenessAnalysis?) -> LearningInsightsAnalysisPhase {
+        guard let analysis else { return .idle }
+        return analysis.hasResults ? .ready : .empty
     }
 }
 

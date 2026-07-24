@@ -23,6 +23,47 @@ struct StudyInspectorView: View {
     let onCreateGapFlashcards: (StudyKnowledgeGap) -> Void
     let onStartReviewSession: () -> Void
     let onOpenFocusWorkspace: (FocusWorkspaceType) -> Void
+    let streaks: StudyStreakSummary?
+
+    init(
+        noteTitle: String,
+        insights: LectureCompletenessAnalysis,
+        knowledgeGaps: [StudyKnowledgeGap],
+        learningMemory: [StudyMemoryEntry],
+        progress: StudyProgress,
+        summaryPack: StudySummaryPack,
+        examReadiness: ExamReadinessScore,
+        onSelectConcept: @escaping (String) -> Void,
+        onSelectGap: @escaping (StudyKnowledgeGap) -> Void,
+        onExplainConcept: @escaping (String) -> Void,
+        onGenerateSection: @escaping (String) -> Void,
+        onInsertConcept: @escaping (String) -> Void,
+        onLearnGap: @escaping (StudyKnowledgeGap) -> Void,
+        onGenerateGapNotes: @escaping (StudyKnowledgeGap) -> Void,
+        onCreateGapFlashcards: @escaping (StudyKnowledgeGap) -> Void,
+        onStartReviewSession: @escaping () -> Void,
+        onOpenFocusWorkspace: @escaping (FocusWorkspaceType) -> Void,
+        streaks: StudyStreakSummary? = nil
+    ) {
+        self.noteTitle = noteTitle
+        self.insights = insights
+        self.knowledgeGaps = knowledgeGaps
+        self.learningMemory = learningMemory
+        self.progress = progress
+        self.summaryPack = summaryPack
+        self.examReadiness = examReadiness
+        self.onSelectConcept = onSelectConcept
+        self.onSelectGap = onSelectGap
+        self.onExplainConcept = onExplainConcept
+        self.onGenerateSection = onGenerateSection
+        self.onInsertConcept = onInsertConcept
+        self.onLearnGap = onLearnGap
+        self.onGenerateGapNotes = onGenerateGapNotes
+        self.onCreateGapFlashcards = onCreateGapFlashcards
+        self.onStartReviewSession = onStartReviewSession
+        self.onOpenFocusWorkspace = onOpenFocusWorkspace
+        self.streaks = streaks
+    }
 
     @State private var selectedConcept: InspectableConcept?
     @State private var selectedGap: StudyKnowledgeGap?
@@ -190,7 +231,7 @@ struct StudyInspectorView: View {
                     Text("Best Score: \(progress.bestQuizScore)%")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text("Streak: \(progress.quizAttempts.count > 0 ? "\(progress.quizAttempts.count) days" : "Not started")")
+                    Text("Current Streak: \(streaks?.currentStreak ?? 0) days")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

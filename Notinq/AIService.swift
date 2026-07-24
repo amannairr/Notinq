@@ -2,6 +2,7 @@ import Foundation
 
 enum AIAction {
     case summarize
+    case simplify
     case rewrite
     case explain
     case add
@@ -10,6 +11,7 @@ enum AIAction {
     var title: String {
         switch self {
         case .summarize: return "Summary"
+        case .simplify: return "Simplify"
         case .rewrite: return "Rewrite"
         case .explain: return "Explanation"
         case .add: return "Addition"
@@ -20,6 +22,7 @@ enum AIAction {
     var blockTitle: String {
         switch self {
         case .summarize: return "Summary"
+        case .simplify: return "Simplify"
         case .rewrite: return "Rewrite"
         case .explain: return "Explain"
         case .add: return "Continue"
@@ -30,6 +33,7 @@ enum AIAction {
 
 enum AIRequestKind {
     case summarize
+    case simplify
     case rewrite(sourceLength: Int)
     case explain
     case add(sourceLength: Int)
@@ -50,6 +54,8 @@ enum AIRequestKind {
         switch self {
         case .summarize:
             return min(cap, 180)
+        case .simplify:
+            return min(cap, 260)
         case .rewrite(let sourceLength):
             return min(cap, Int32(min(360, max(200, sourceLength / 3))))
         case .explain:

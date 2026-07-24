@@ -18,20 +18,27 @@ struct AITextView: NSViewRepresentable {
     var onReady: ((TextViewBridge) -> Void)?
     
     var onSummarize: (() -> Void)?
+    var onSimplify: (() -> Void)?
     var onRewrite: (() -> Void)?
     var onExplain: (() -> Void)?
+    var onFlashcards: (() -> Void)?
+    var onQuiz: (() -> Void)?
     var onAdd: (() -> Void)?
+    var onCopy: (() -> Void)?
     var onStyleChange: ((TextStyleState) -> Void)?
     var onAIBlockFollowUp: ((AIBlockFollowUp, AIBlockSelection) -> Void)?
     
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = FillingScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 72, right: 0)
+        scrollView.contentView.automaticallyAdjustsContentInsets = false
+        scrollView.contentView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 72, right: 0)
         
         let textView = AIBlockTextView()
         textView.allowsUndo = true
@@ -57,13 +64,13 @@ struct AITextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        
-        textView.textContainerInset = NSSize(width: 0, height: 34)
+
+        textView.textContainerInset = NSSize(width: 24, height: 24)
         textView.textContainer?.lineFragmentPadding = 0
         textView.layoutManager?.allowsNonContiguousLayout = true
         
         textView.textContainer?.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
+            width: scrollView.contentSize.width,
             height: CGFloat.greatestFiniteMagnitude
         )
         
@@ -77,6 +84,7 @@ struct AITextView: NSViewRepresentable {
         textView.defaultParagraphStyle = paragraphStyle
 
         scrollView.documentView = textView
+        textView.frame = scrollView.contentView.bounds
         
         DispatchQueue.main.async {
             context.coordinator.bridge.textView = textView
@@ -95,15 +103,47 @@ struct AITextView: NSViewRepresentable {
                 return
             }
 
-            if context.coordinator.documentID != documentID || textView.string != documentText {
-                context.coordinator.documentID = documentID
+            context.coordinator.documentID = documentID
+
+            if !Self.shouldReplaceDocumentText(
+                currentText: textView.string,
+                renderedDocumentText: context.coordinator.renderedDocumentText,
+                incomingText: documentText
+            ) {
+                context.coordinator.renderedDocumentText = documentText
+                return
+            }
+
+            if context.coordinator.renderedDocumentText != documentText {
                 context.coordinator.replaceDocumentText(in: textView, with: documentText)
             }
         }
     }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        let width = proposal.width ?? nsView.frame.width
+        let windowHeight = nsView.window?.contentLayoutRect.height ?? nsView.window?.frame.height ?? 0
+        let proposedHeight = proposal.height ?? nsView.frame.height
+        let height = max(proposedHeight, windowHeight)
+
+        guard width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }
     
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
+    }
+
+    static func shouldReplaceDocumentText(
+        currentText: String,
+        renderedDocumentText: String?,
+        incomingText: String
+    ) -> Bool {
+        guard incomingText != renderedDocumentText else {
+            return false
+        }
+
+        return currentText != incomingText
     }
     
     // MARK: - Coordinator
@@ -115,6 +155,7 @@ struct AITextView: NSViewRepresentable {
         var selectionToolbar: NSView?
         var aiBlockActions: NSView?
         var documentID: UUID?
+        var renderedDocumentText: String?
         private var debouncedSaveWorkItem: DispatchWorkItem?
         private let saveDebounceSeconds: TimeInterval = 0.75
         
@@ -173,7 +214,7 @@ struct AITextView: NSViewRepresentable {
             selectionToolbar?.removeFromSuperview()
 
             let range = textView.selectedRange()
-            guard range.length > 0 else { return }
+            guard SelectionToolbarView.isVisible(for: range) else { return }
 
             let selectionRect = textView.firstRect(forCharacterRange: range, actualRange: nil)
             let rectInWindow = textView.window?.convertFromScreen(selectionRect) ?? .zero
@@ -182,9 +223,13 @@ struct AITextView: NSViewRepresentable {
             let hosting = NSHostingView(
                 rootView: SelectionToolbarView(
                     onSummarize: { self.parent.onSummarize?() },
+                    onSimplify: { self.parent.onSimplify?() },
                     onRewrite: { self.parent.onRewrite?() },
                     onExplain: { self.parent.onExplain?() },
-                    onAdd: { self.parent.onAdd?() }
+                    onFlashcards: { self.parent.onFlashcards?() },
+                    onQuiz: { self.parent.onQuiz?() },
+                    onAdd: { self.parent.onAdd?() },
+                    onCopy: { self.parent.onCopy?() }
                 )
             )
 
@@ -252,26 +297,48 @@ struct AITextView: NSViewRepresentable {
 
         func replaceDocumentText(in textView: NSTextView, with text: String) {
             debouncedSaveWorkItem?.cancel()
-            textView.string = text
-            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            guard renderedDocumentText != text else { return }
+
+            let previousSelection = textView.selectedRange()
+            let rendered = MarkdownRichTextRenderer.render(
+                text,
+                baseFontSize: textView.font?.pointSize ?? 16,
+                baseAttributes: documentBaseAttributes(for: textView)
+            )
+
+            textView.textStorage?.beginEditing()
+            textView.textStorage?.setAttributedString(rendered)
+            textView.textStorage?.endEditing()
+
+            let clampedLocation = min(previousSelection.location, rendered.length)
+            let clampedLength = min(previousSelection.length, rendered.length - clampedLocation)
+            let restoredSelection = NSRange(location: clampedLocation, length: clampedLength)
+            textView.setSelectedRange(restoredSelection)
+            renderedDocumentText = text
+        }
+
+        private func documentBaseAttributes(for textView: NSTextView) -> [NSAttributedString.Key: Any] {
+            var attributes = textView.typingAttributes
+            attributes[.foregroundColor] = textView.textColor
+            attributes[.font] = textView.font ?? NSFont.systemFont(ofSize: 16)
+            return attributes
         }
     }
-
+    
     private func configureReadingColumn(for scrollView: NSScrollView, textView: NSTextView) {
         guard let textContainer = textView.textContainer else { return }
 
         let availableWidth = max(0, scrollView.contentSize.width)
-        let horizontalInset: CGFloat = 20
 
         textContainer.containerSize = NSSize(
-            width: availableWidth - (horizontalInset * 2),
+            width: availableWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
 
-        textView.textContainerInset = NSSize(
-            width: horizontalInset,
-            height: 28
-        )
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 72, right: 0)
+        scrollView.contentView.automaticallyAdjustsContentInsets = false
+        scrollView.contentView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 72, right: 0)
+        textView.textContainerInset = NSSize(width: 24, height: 24)
     }
 }
 
@@ -353,9 +420,19 @@ final class AIBlockTextView: NSTextView {
             blockRect.size.width += 20
             blockRect.size.height += 10
 
-            NSColor(calibratedRed: 0.93, green: 0.91, blue: 0.86, alpha: 0.28).setFill()
+            let insertionDate = storage.attribute(.aiBlockInsertedAt, at: blockRange.location, effectiveRange: nil) as? Date
+            let emphasis = Self.insertionHighlightAlpha(for: insertionDate)
+            NSColor(calibratedRed: 0.93, green: 0.91, blue: 0.86, alpha: emphasis).setFill()
             NSBezierPath(roundedRect: blockRect, xRadius: 8, yRadius: 8).fill()
         }
+    }
+
+    private static func insertionHighlightAlpha(for insertionDate: Date?) -> CGFloat {
+        guard let insertionDate else { return 0.28 }
+        let age = Date().timeIntervalSince(insertionDate)
+        guard age >= 0 else { return 0.34 }
+        if age >= 0.9 { return 0.22 }
+        return 0.34 - CGFloat(age / 0.9) * 0.12
     }
 
     private func fullRangeForBlock(id blockID: String, seedRange: NSRange, in storage: NSTextStorage) -> NSRange {
@@ -381,5 +458,11 @@ final class AIBlockTextView: NSTextView {
         }
 
         return NSRange(location: lower, length: upper - lower)
+    }
+}
+
+final class FillingScrollView: NSScrollView {
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
 }

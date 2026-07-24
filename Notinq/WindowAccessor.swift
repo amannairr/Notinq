@@ -15,7 +15,7 @@ struct WindowAccessor: NSViewRepresentable {
             if let window = view.window {
                 window.titleVisibility = .hidden
                 window.titlebarAppearsTransparent = true
-                window.isMovableByWindowBackground = false
+                window.isMovableByWindowBackground = true
             }
         }
         return view

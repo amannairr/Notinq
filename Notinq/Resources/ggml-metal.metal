@@ -15,6 +15,10 @@ __embed_ggml-common.h__
 #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
 #endif
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wduplicate-decl-specifier"
+#pragma clang diagnostic ignored "-Wunused-function"
+
 using namespace metal;
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))

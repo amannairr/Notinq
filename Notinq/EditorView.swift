@@ -5,6 +5,7 @@ struct EditorView: View {
     @EnvironmentObject private var appState: AppState
     var onAnalyzeLecture: () -> Void = {}
     var onUpdateKnowledgeGraph: () -> Void = {}
+    var onGenerateStudyMaterials: () -> Void = {}
     @State private var styleState = TextStyleState()
     @State private var bridge = TextViewBridge()
     @State private var selectedText = ""
@@ -14,11 +15,6 @@ struct EditorView: View {
 
     private var selectedNoteID: UUID? {
         appState.selectedNoteID
-    }
-
-    private var noteTitle: String {
-        guard let selectedNoteID else { return "Untitled Note" }
-        return appState.noteTitle(for: selectedNoteID)
     }
 
     private var noteContentBinding: Binding<String> {
@@ -43,7 +39,7 @@ struct EditorView: View {
                     appState.selectedMode = .ai
                 },
                 onGenerateStudyMaterials: {
-                    appState.selectedMode = .study
+                    onGenerateStudyMaterials()
                 },
                 onAnalyzeLecture: {
                     onAnalyzeLecture()
@@ -56,91 +52,64 @@ struct EditorView: View {
                 canGenerateStudyMaterials: selectedNoteID != nil,
                 canUpdateKnowledgeGraph: selectedNoteID != nil
             )
+            .frame(height: 58)
             .background(Color.bgEditor)
             .zIndex(2)
 
             Divider()
                 .opacity(0.08)
 
-            VStack(alignment: .leading, spacing: 14) {
-
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(noteTitle)
-                            .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    }
-
-                    Spacer()
-                }
-
+            ZStack(alignment: .topLeading) {
                 if let selectedNoteID {
-
-                    ZStack(alignment: .topLeading) {
-
-                        AITextView(
-                            documentID: selectedNoteID,
-                            documentText: noteContentBinding.wrappedValue,
-                            onDebouncedTextChange: { newText in
-                                appState.updateNoteContent(newText, for: selectedNoteID)
-                            },
-                            onSelectionChange: { text, range in
-                                selectedText = text
-                                selectedRange = range
-                            },
-                            onReady: { newBridge in
-                                bridge = newBridge
-                            },
-                            onSummarize: { performSelectionAction(.summarize) },
-                            onRewrite: { performSelectionAction(.rewrite) },
-                            onExplain: { performSelectionAction(.explain) },
-                            onAdd: { performSelectionAction(.ask) },
-                            onStyleChange: { styleState = $0 },
-                            onAIBlockFollowUp: { followUp, block in
-                                performAIBlockFollowUp(followUp, block: block)
-                            }
-                        )
-
-                        if let activeSelectionAction {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text(selectionActionTitle(for: activeSelectionAction))
-                                    .font(.caption.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.textPrimary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.borderSubtle, lineWidth: 0.5)
-                            )
-                            .padding(14)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    AITextView(
+                        documentID: selectedNoteID,
+                        documentText: noteContentBinding.wrappedValue,
+                        onDebouncedTextChange: { newText in
+                            appState.updateNoteContent(newText, for: selectedNoteID)
+                        },
+                        onSelectionChange: { text, range in
+                            selectedText = text
+                            selectedRange = range
+                        },
+                        onReady: { newBridge in
+                            bridge = newBridge
+                        },
+                        onSummarize: { performSelectionAction(.summarize) },
+                        onSimplify: { performSelectionAction(.simplify) },
+                        onRewrite: { performSelectionAction(.rewrite) },
+                        onExplain: { performSelectionAction(.explain) },
+                        onFlashcards: { appState.selectedMode = .study },
+                        onQuiz: { appState.selectedMode = .study },
+                        onAdd: { performSelectionAction(.ask) },
+                        onCopy: { copySelectedText() },
+                        onStyleChange: { styleState = $0 },
+                onAIBlockFollowUp: { followUp, block in
+                            performAIBlockFollowUp(followUp, block: block)
                         }
+                    )
+                    .padding(.top, 6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
+                    if let activeSelectionAction {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(selectionActionTitle(for: activeSelectionAction))
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.borderSubtle, lineWidth: 0.5)
+                        )
+                        .padding(14)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     }
-                    .background(Color.white)
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: 18,
-                            style: .continuous
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(
-                            cornerRadius: 18,
-                            style: .continuous
-                        )
-                        .stroke(
-                            Color.black.opacity(0.06),
-                            lineWidth: 1
-                        )
-                    )
-
                 } else {
-
                     VStack(alignment: .leading, spacing: 8) {
                         Text("No note selected")
                             .font(.headline)
@@ -148,30 +117,20 @@ struct EditorView: View {
                         Text("Choose a note from the sidebar to begin editing.")
                             .foregroundStyle(.secondary)
                     }
-                    .padding(18)
+                    .padding(.top, 6)
                     .frame(
                         maxWidth: .infinity,
                         maxHeight: .infinity,
                         alignment: .topLeading
                     )
-                    .background(Color.white.opacity(0.75))
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: 18,
-                            style: .continuous
-                        )
-                    )
                 }
             }
-            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            Spacer(minLength: 0)
         }
-        .frame(
-            maxWidth: .infinity,
-            maxHeight: .infinity,
-            alignment: .topLeading
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.bgEditor)
-        .clipped()
         .animation(.easeInOut(duration: 0.18), value: activeSelectionAction != nil)
     }
 
@@ -224,19 +183,23 @@ struct EditorView: View {
         let instruction: String
         switch action {
         case .summarize:
-            instruction = "Summarize the selected passage in three concise bullet points."
+            instruction = "Return only a concise summary with 3 to 5 bullet points. Do not add a preamble or labels."
+        case .simplify:
+            instruction = "Rewrite the selected passage in plain, simple language. Keep the meaning, keep it shorter if possible, and return only the rewritten text."
         case .rewrite:
-            instruction = "Rewrite the selected passage for clarity and flow while preserving meaning."
+            instruction = "Rewrite the selected passage for clarity, grammar, and flow while preserving every fact. Return only the revised passage."
         case .explain:
-            instruction = "Explain the selected passage in simple language with note-aware context."
+            instruction = "Explain the selected passage in simple language. Use note context when helpful, but return only the explanation."
         case .add:
-            instruction = "Continue the selected passage in a natural way."
+            instruction = "Continue the selected passage naturally with 1 to 3 sentences."
         case .ask:
-            instruction = "Answer the user's question about the selected passage and nearby note context."
+            instruction = "Answer the user's question using the selected text and nearby note context. If the context is not enough, say that clearly."
         }
 
         return """
         You are helping edit a student note.
+        Return only the requested content.
+        Do not include headings such as 'Answer:' or labels such as 'Generated'.
 
         Note context:
         \(noteContext)
@@ -253,6 +216,8 @@ struct EditorView: View {
         switch action {
         case .summarize:
             return .summarize
+        case .simplify:
+            return .rewrite(sourceLength: selectedText.count)
         case .rewrite:
             return .rewrite(sourceLength: selectedText.count)
         case .explain:
@@ -280,7 +245,7 @@ struct EditorView: View {
 
         let snapshot = NoteFile(
             id: noteID,
-            title: noteTitle,
+            title: appState.noteTitle(for: noteID),
             content: liveText,
             updatedAt: appState.noteUpdatedAt(for: noteID) ?? Date()
         )
@@ -291,6 +256,8 @@ struct EditorView: View {
         switch action {
         case .summarize:
             return "Summarizing"
+        case .simplify:
+            return "Simplifying"
         case .rewrite:
             return "Rewriting"
         case .explain:
@@ -300,5 +267,12 @@ struct EditorView: View {
         case .ask:
             return "Thinking"
         }
+    }
+
+    private func copySelectedText() {
+        let text = bridge.selectedTextAndRange()?.text ?? selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }

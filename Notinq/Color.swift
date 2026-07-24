@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 extension Color {
     static let bgPrimary = Color(nsColor: NSColor(name: nil) { appearance in
@@ -32,6 +33,23 @@ extension Color {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedRed: 0.128, green: 0.132, blue: 0.136, alpha: 1.0)
             : NSColor(calibratedRed: 0.988, green: 0.988, blue: 0.988, alpha: 1.0)
+    })
+    static let studySurface = Color(nsColor: .controlBackgroundColor)
+    static let studySurfaceRaised = Color(nsColor: .textBackgroundColor)
+    static let studySurfaceMuted = Color(nsColor: .underPageBackgroundColor)
+    static let studyBorder = Color(nsColor: .separatorColor)
+    static let studyBorderSoft = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 1.0, alpha: 0.14)
+            : NSColor(calibratedWhite: 0.0, alpha: 0.05)
+    })
+    static let graphSurface = Color(nsColor: .windowBackgroundColor)
+    static let graphSurfaceRaised = Color(nsColor: .textBackgroundColor)
+    static let graphSurfaceMuted = Color(nsColor: .controlBackgroundColor)
+    static let graphBorderSoft = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 1.0, alpha: 0.12)
+            : NSColor(calibratedWhite: 0.0, alpha: 0.06)
     })
     static let bgElevated = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -83,4 +101,58 @@ extension Color {
             ? NSColor(calibratedWhite: 1.0, alpha: 0.12)
             : NSColor(calibratedWhite: 0.0, alpha: 0.07)
     })
+
+    static func resolvedNotesPaneBackground(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.196, green: 0.202, blue: 0.200, alpha: 0.98)
+            : NSColor(calibratedRed: 0.922, green: 0.922, blue: 0.922, alpha: 0.98)
+    }
+
+    static func resolvedStudySurface(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 0.18, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.95, alpha: 1.0)
+    }
+
+    static func resolvedStudySurfaceRaised(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 0.22, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.98, alpha: 1.0)
+    }
+
+    static func resolvedStudySurfaceMuted(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 0.24, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.97, alpha: 1.0)
+    }
+
+    static func resolvedStudyBorderSoft(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 1.0, alpha: 0.14)
+            : NSColor(calibratedWhite: 0.0, alpha: 0.05)
+    }
+
+    static func resolvedGraphSurface(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 0.18, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.985, alpha: 1.0)
+    }
+
+    static func resolvedGraphSurfaceRaised(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 0.23, alpha: 1.0)
+            : NSColor(calibratedWhite: 1.0, alpha: 1.0)
+    }
+
+    static func resolvedGraphSurfaceMuted(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 0.21, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.96, alpha: 1.0)
+    }
+
+    static func resolvedGraphBorderSoft(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 1.0, alpha: 0.12)
+            : NSColor(calibratedWhite: 0.0, alpha: 0.06)
+    }
 }

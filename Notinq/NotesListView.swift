@@ -31,7 +31,7 @@ struct NotesListView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .background(Color.white.opacity(0.10))
+                .background(Color.bgNotesPane)
 
             } else {
                 HStack(alignment: .center) {
@@ -40,17 +40,17 @@ struct NotesListView: View {
                         .foregroundStyle(Color.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        CircleButton(icon: "plus") {
+                        CircleButton(icon: "plus", label: "New Note") {
                             appState.createNoteInSelectedFolder()
                         }
-                        CircleButton(icon: "sidebar.left") {
+                        CircleButton(icon: "sidebar.left", label: "Collapse notes list") {
                             isCollapsed = true
                         }
                     }
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .background(Color.white.opacity(0.10))
+                .background(Color.bgNotesPane)
             }
 
             LinearGradient(

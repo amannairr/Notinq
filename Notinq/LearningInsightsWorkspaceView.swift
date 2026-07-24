@@ -8,16 +8,36 @@ struct LearningInsightsWorkspaceView: View {
     let onInsertIntoNote: (String) -> Void
     let onClose: () -> Void
 
+    @StateObject private var controller: LearningInsightsWorkspaceModel
     @State private var lectureTranscript: String = ""
     @State private var lectureSlides: String = ""
-    @State private var analysis: LectureCompletenessAnalysis?
-    @State private var isAnalyzing = false
-    @State private var selectedConcept: LectureCoverageItem?
-    @State private var previewMode: InsightPreviewMode = .explanation
-    @State private var generatedPreview: String = ""
-    @State private var statusMessage: String = "Add a transcript or slide notes, then run the analysis."
 
     private let railWidth: CGFloat = 286
+
+    init(
+        noteTitle: String,
+        studentNotes: String,
+        initialAnalysis: LectureCompletenessAnalysis?,
+        onSaveAnalysis: @escaping (LectureCompletenessAnalysis) -> Void,
+        onInsertIntoNote: @escaping (String) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.noteTitle = noteTitle
+        self.studentNotes = studentNotes
+        self.initialAnalysis = initialAnalysis
+        self.onSaveAnalysis = onSaveAnalysis
+        self.onInsertIntoNote = onInsertIntoNote
+        self.onClose = onClose
+        _controller = StateObject(
+            wrappedValue: LearningInsightsWorkspaceModel(
+                noteTitle: noteTitle,
+                studentNotes: studentNotes,
+                initialAnalysis: initialAnalysis,
+                onSaveAnalysis: onSaveAnalysis,
+                onInsertIntoNote: onInsertIntoNote
+            )
+        )
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -28,55 +48,84 @@ struct LearningInsightsWorkspaceView: View {
                 headerCard(analysis: currentAnalysis)
 
                 Divider()
-                    .overlay(Color.black.opacity(0.06))
+                    .overlay(Color.studyBorderSoft)
 
-                ScrollView {
-                    Group {
-                        if isWide {
-                            HStack(alignment: .top, spacing: 16) {
-                                mainColumn(analysis: currentAnalysis, isWide: isWide)
-                                insightsRail(analysis: currentAnalysis)
-                                    .frame(width: railWidth)
+                ScrollViewReader { _ in
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            Group {
+                                if isWide {
+                                    HStack(alignment: .top, spacing: 16) {
+                                        mainColumn(analysis: currentAnalysis, isWide: isWide)
+                                        insightsRail(analysis: currentAnalysis)
+                                            .frame(width: railWidth)
+                                    }
+                                } else {
+                                    VStack(spacing: 16) {
+                                        mainColumn(analysis: currentAnalysis, isWide: isWide)
+                                        insightsRail(analysis: currentAnalysis)
+                                    }
+                                }
                             }
-                        } else {
-                            VStack(spacing: 16) {
-                                mainColumn(analysis: currentAnalysis, isWide: isWide)
-                                insightsRail(analysis: currentAnalysis)
-                            }
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                            footerBar(analysis: currentAnalysis)
+                                .padding(.top, 4)
                         }
+                        .padding(16)
+                        .padding(.bottom, 28)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .scrollIndicators(.hidden)
                 }
-                .scrollIndicators(.hidden)
-
-                Divider()
-                    .overlay(Color.black.opacity(0.06))
-
-                footerBar(analysis: currentAnalysis)
             }
             .background(backgroundLayer)
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                    .stroke(Color.studyBorderSoft, lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.18), radius: 36, x: 0, y: 20)
             .onAppear {
-                seedInitialAnalysisIfNeeded()
-                syncSelectionIfNeeded(using: currentAnalysis)
+                controller.updateInitialAnalysis(initialAnalysis)
             }
             .onChange(of: initialAnalysisFingerprint) { _, _ in
-                seedInitialAnalysisIfNeeded()
-            }
-            .onChange(of: analysisFingerprint(for: currentAnalysis)) { _, _ in
-                syncSelectionIfNeeded(using: currentAnalysis)
+                controller.updateInitialAnalysis(initialAnalysis)
             }
         }
     }
 
     private var resolvedAnalysis: LectureCompletenessAnalysis? {
-        analysis ?? initialAnalysis
+        controller.resolvedAnalysis ?? initialAnalysis
+    }
+
+    private var analysis: LectureCompletenessAnalysis? {
+        get { controller.analysis ?? initialAnalysis }
+        set { controller.analysis = newValue }
+    }
+
+    private var isAnalyzing: Bool {
+        controller.isAnalyzing
+    }
+
+    private var selectedConcept: LectureCoverageItem? {
+        get { controller.selectedConcept }
+        set { controller.selectedConcept = newValue }
+    }
+
+    private var previewMode: LearningInsightsPreviewMode {
+        get { controller.previewMode }
+        set { controller.previewMode = newValue }
+    }
+
+    private var generatedPreview: String {
+        get { controller.generatedPreview }
+        set { controller.generatedPreview = newValue }
+    }
+
+    private var statusMessage: String {
+        get { controller.statusMessage }
+        set { controller.statusMessage = newValue }
     }
 
     private var initialAnalysisFingerprint: String {
@@ -98,32 +147,107 @@ struct LearningInsightsWorkspaceView: View {
         .joined(separator: "|")
     }
 
-    private func syncSelectionIfNeeded(using analysis: LectureCompletenessAnalysis?) {
-        guard let analysis else {
-            selectedConcept = nil
-            generatedPreview = ""
-            return
+    private var analysisPrimaryButtonTitle: String {
+        switch controller.phase {
+        case .loading:
+            return "Analyzing..."
+        case .failure:
+            return "Retry Analysis"
+        case .ready, .empty:
+            return "Refresh Analysis"
+        case .idle:
+            return "Analyze Lecture"
         }
-
-        let allItems = analysis.missingConcepts + analysis.partiallyCapturedConcepts + analysis.wellCoveredConcepts
-        guard !allItems.isEmpty else {
-            selectedConcept = nil
-            generatedPreview = ""
-            return
-        }
-
-        if let selectedConcept,
-           allItems.contains(where: { $0.id == selectedConcept.id }) {
-            return
-        }
-
-        selectedConcept = allItems.first
-        updatePreview(for: selectedConcept, in: analysis)
     }
 
-    private func seedInitialAnalysisIfNeeded() {
-        guard analysis == nil, let initialAnalysis else { return }
-        analysis = initialAnalysis
+    @ViewBuilder
+    private var analysisStatusBanner: some View {
+        switch controller.phase {
+        case .idle:
+            emptyCompactState(
+                title: "Ready to analyze",
+                message: "Paste transcript and slide text, then generate the lecture comparison."
+            )
+        case .loading:
+            HStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Analyzing lecture sources")
+                        .font(.headline)
+                    Text("Comparing transcript, slides, and note content now.")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.studySurfaceRaised)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.studyBorderSoft, lineWidth: 1)
+            )
+        case .ready:
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color(red: 0.31, green: 0.58, blue: 0.39))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Analysis complete")
+                        .font(.headline)
+                    Text(statusMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Button("Refresh") {
+                    analyzeLecture()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.studySurfaceRaised)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.studyBorderSoft, lineWidth: 1)
+            )
+        case .empty:
+            emptyCompactState(
+                title: "No lecture concepts identified",
+                message: statusMessage
+            )
+        case .failure(let message):
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color(red: 0.73, green: 0.35, blue: 0.33))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Analysis failed")
+                        .font(.headline)
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Button("Retry") {
+                    analyzeLecture()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0.23, green: 0.47, blue: 0.59))
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.studySurfaceRaised)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.studyBorderSoft, lineWidth: 1)
+            )
+        }
     }
 
     private func headerCard(analysis: LectureCompletenessAnalysis?) -> some View {
@@ -174,6 +298,7 @@ struct LearningInsightsWorkspaceView: View {
     private func mainColumn(analysis: LectureCompletenessAnalysis?, isWide: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             sourceIntakeCard(isWide: isWide)
+            analysisStatusBanner
 
             if let analysis {
                 coverageDashboardCard(analysis: analysis)
@@ -245,11 +370,11 @@ struct LearningInsightsWorkspaceView: View {
                     .lineSpacing(3)
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.62))
+                    .background(Color.studySurfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                            .stroke(Color.studyBorderSoft, lineWidth: 1)
                     )
             }
 
@@ -262,7 +387,7 @@ struct LearningInsightsWorkspaceView: View {
                         } else {
                             Image(systemName: "sparkles")
                         }
-                        Text(isAnalyzing ? "Analyzing..." : "Analyze Lecture")
+                        Text(analysisPrimaryButtonTitle)
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
@@ -270,7 +395,9 @@ struct LearningInsightsWorkspaceView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color(red: 0.23, green: 0.47, blue: 0.59))
-                .disabled(!canAnalyze || isAnalyzing)
+                .accessibilityLabel(LearningInsightsAction.analyze.accessibilityLabel)
+                .accessibilityHint("Runs the lecture comparison against the current note.")
+                .disabled(!LearningInsightsButtonAvailability.canAnalyze(isAnalyzing: isAnalyzing, hasSourceText: canAnalyze))
 
                 if let selectedConcept {
                     Button(action: { generatePreview(for: selectedConcept, mode: .explanation) }) {
@@ -278,7 +405,8 @@ struct LearningInsightsWorkspaceView: View {
                             .fontWeight(.semibold)
                     }
                     .buttonStyle(.bordered)
-                    .disabled(isAnalyzing)
+                    .accessibilityLabel(LearningInsightsAction.explanation.accessibilityLabel)
+                    .disabled(!LearningInsightsButtonAvailability.canGenerate(isAnalyzing: isAnalyzing, hasConceptSelection: true))
                 }
             }
         }
@@ -391,11 +519,11 @@ struct LearningInsightsWorkspaceView: View {
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white.opacity(0.72))
+                        .background(Color.studySurfaceRaised)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                                .stroke(Color.studyBorderSoft, lineWidth: 1)
                         )
                     }
                 }
@@ -418,8 +546,11 @@ struct LearningInsightsWorkspaceView: View {
 
                 Spacer(minLength: 0)
 
-                Picker("", selection: $previewMode) {
-                    ForEach(InsightPreviewMode.allCases) { mode in
+                Picker("", selection: Binding(
+                    get: { controller.previewMode },
+                    set: { controller.previewMode = $0 }
+                )) {
+                    ForEach(LearningInsightsPreviewMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
@@ -439,11 +570,11 @@ struct LearningInsightsWorkspaceView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .padding(14)
-                    .background(Color.white.opacity(0.70))
+                    .background(Color.studySurfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                            .stroke(Color.studyBorderSoft, lineWidth: 1)
                     )
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -504,11 +635,11 @@ struct LearningInsightsWorkspaceView: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.70))
+        .background(Color.studySurfaceRaised)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
         )
     }
 
@@ -526,9 +657,9 @@ struct LearningInsightsWorkspaceView: View {
                     ForEach(analysis.reviewPriority.prefix(5)) { item in
                         Button {
                             let matching = matchConcept(named: item.title, in: analysis)
-                            selectedConcept = matching ?? selectedConcept
-                            if let selectedConcept {
-                                updatePreview(for: selectedConcept, in: analysis)
+                            if let matching {
+                                controller.selectedConcept = matching
+                                controller.selectConcept(matching, analysis: analysis)
                             }
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
@@ -552,7 +683,7 @@ struct LearningInsightsWorkspaceView: View {
                                 Spacer(minLength: 0)
                             }
                             .padding(10)
-                            .background(Color.white.opacity(0.70))
+                            .background(Color.studySurfaceRaised)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                         .buttonStyle(.plain)
@@ -579,11 +710,11 @@ struct LearningInsightsWorkspaceView: View {
                 .foregroundStyle(Color.textSecondary)
         }
         .padding(14)
-        .background(Color.white.opacity(0.70))
+        .background(Color.studySurfaceRaised)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
         )
     }
 
@@ -598,7 +729,8 @@ struct LearningInsightsWorkspaceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(Color(red: 0.23, green: 0.47, blue: 0.59))
-            .disabled(selectedConcept == nil)
+            .accessibilityLabel(LearningInsightsAction.explanation.accessibilityLabel)
+            .disabled(!LearningInsightsButtonAvailability.canGenerate(isAnalyzing: isAnalyzing, hasConceptSelection: selectedConcept != nil))
 
             Button {
                 if let selectedConcept {
@@ -608,7 +740,8 @@ struct LearningInsightsWorkspaceView: View {
                 Label("Create Flashcards", systemImage: "rectangle.stack.badge.plus")
             }
             .buttonStyle(.bordered)
-            .disabled(selectedConcept == nil)
+            .accessibilityLabel(LearningInsightsAction.flashcards.accessibilityLabel)
+            .disabled(!LearningInsightsButtonAvailability.canGenerate(isAnalyzing: isAnalyzing, hasConceptSelection: selectedConcept != nil))
 
             Button {
                 if let selectedConcept {
@@ -618,19 +751,20 @@ struct LearningInsightsWorkspaceView: View {
                 Label("Create Quiz Questions", systemImage: "checkmark.circle")
             }
             .buttonStyle(.bordered)
-            .disabled(selectedConcept == nil)
+            .accessibilityLabel(LearningInsightsAction.quiz.accessibilityLabel)
+            .disabled(!LearningInsightsButtonAvailability.canGenerate(isAnalyzing: isAnalyzing, hasConceptSelection: selectedConcept != nil))
 
             Button {
                 if !generatedPreview.isEmpty {
-                    onInsertIntoNote(generatedPreview)
-                    statusMessage = "Inserted the generated content into the note."
+                    controller.insertGeneratedPreview()
                 }
             } label: {
                 Label("Insert Into Note", systemImage: "square.and.arrow.down")
             }
             .buttonStyle(.borderedProminent)
             .tint(Color(red: 0.31, green: 0.58, blue: 0.39))
-            .disabled(generatedPreview.isEmpty)
+            .accessibilityLabel(LearningInsightsAction.insert.accessibilityLabel)
+            .disabled(!LearningInsightsButtonAvailability.canInsert(isAnalyzing: isAnalyzing, hasGeneratedPreview: generatedPreview.isEmpty == false))
 
             Spacer(minLength: 0)
 
@@ -644,93 +778,17 @@ struct LearningInsightsWorkspaceView: View {
     }
 
     private func analyzeLecture() {
-        guard canAnalyze, !isAnalyzing else { return }
-        isAnalyzing = true
-
-        let input = LectureAnalysisInput(
-            lectureTitle: noteTitle,
-            noteTitle: noteTitle,
-            studentNotes: studentNotes,
-            sources: [
-                LectureContentSource(kind: .transcript, title: "Transcript", text: lectureTranscript),
-                LectureContentSource(kind: .slides, title: "Slides", text: lectureSlides)
-            ]
-        )
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = LectureCompletenessAnalyzer.shared.analyze(input: input)
-            DispatchQueue.main.async {
-                analysis = result
-                isAnalyzing = false
-                statusMessage = "Analysis updated."
-                onSaveAnalysis(result)
-                syncSelectionIfNeeded(using: result)
-            }
-        }
-    }
-
-    private func generatePreview(for concept: LectureCoverageItem, mode: InsightPreviewMode) {
-        previewMode = mode
-        generatedPreview = previewText(for: concept, mode: mode)
-        statusMessage = "Prepared \(mode.title.lowercased()) for \(concept.title)."
-    }
-
-    private func updatePreview(for concept: LectureCoverageItem?, in analysis: LectureCompletenessAnalysis?) {
-        guard let concept else {
-            generatedPreview = ""
+        guard canAnalyze else {
+            controller.phase = .empty
+            controller.statusMessage = "Add a transcript or slide notes, then run the analysis."
             return
         }
-        generatedPreview = previewText(for: concept, mode: previewMode)
-        if let analysis, selectedConcept == nil {
-            statusMessage = analysis.summary
-        }
+
+        controller.analyzeLecture(transcript: lectureTranscript, slides: lectureSlides)
     }
 
-    private func previewText(for concept: LectureCoverageItem, mode: InsightPreviewMode) -> String {
-        switch mode {
-        case .explanation:
-            return [
-                "Definition",
-                concept.shortExplanation,
-                "",
-                "Why it matters",
-                concept.whyItMatters,
-                "",
-                "What to add",
-                concept.suggestedAddition,
-                "",
-                "Where it appears in notes",
-                noteEvidence(for: concept)
-            ]
-            .joined(separator: "\n")
-        case .flashcards:
-            return [
-                "Flashcard 1",
-                "Front: What is \(concept.title)?",
-                "Back: \(concept.shortExplanation)",
-                "",
-                "Flashcard 2",
-                "Front: Why does \(concept.title) matter?",
-                "Back: \(concept.whyItMatters)",
-                "",
-                "Flashcard 3",
-                "Front: What should be added to the note?",
-                "Back: \(concept.suggestedAddition)"
-            ]
-            .joined(separator: "\n")
-        case .quiz:
-            return [
-                "Question 1",
-                "Explain \(concept.title) in one or two sentences.",
-                "",
-                "Question 2",
-                "Why is \(concept.title) important in the lecture?",
-                "",
-                "Question 3",
-                "What detail is still missing from the notes?"
-            ]
-            .joined(separator: "\n")
-        }
+    private func generatePreview(for concept: LectureCoverageItem, mode: LearningInsightsPreviewMode) {
+        controller.generatePreview(for: concept, mode: mode)
     }
 
     private func conceptGroup(title: String, subtitle: String, tint: Color, items: [LectureCoverageItem]) -> some View {
@@ -756,8 +814,8 @@ struct LearningInsightsWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(items.prefix(6)) { item in
                         Button {
-                            selectedConcept = item
-                            updatePreview(for: item, in: resolvedAnalysis)
+                            controller.selectedConcept = item
+                            controller.selectConcept(item, analysis: resolvedAnalysis)
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: icon(for: item.state))
@@ -787,11 +845,11 @@ struct LearningInsightsWorkspaceView: View {
                                     .clipShape(Capsule())
                             }
                             .padding(10)
-                            .background(Color.white.opacity(selectedConcept?.id == item.id ? 0.88 : 0.70))
+                            .background(selectedConcept?.id == item.id ? Color.studySurfaceRaised : Color.studySurface)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                                    .stroke(Color.studyBorderSoft, lineWidth: 1)
                             )
                         }
                         .buttonStyle(.plain)
@@ -814,9 +872,7 @@ struct LearningInsightsWorkspaceView: View {
             }
             actionChip(title: "Insert Into Note") {
                 generatePreview(for: concept, mode: .explanation)
-                if !generatedPreview.isEmpty {
-                    onInsertIntoNote(generatedPreview)
-                }
+                controller.insertGeneratedPreview()
             }
         }
     }
@@ -827,11 +883,11 @@ struct LearningInsightsWorkspaceView: View {
                 .font(.caption.weight(.semibold))
                 .padding(.vertical, 7)
                 .padding(.horizontal, 11)
-                .background(Color.white.opacity(0.74))
+                .background(Color.studySurfaceRaised)
                 .clipShape(Capsule())
                 .overlay(
                     Capsule()
-                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                        .stroke(Color.studyBorderSoft, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
@@ -857,11 +913,11 @@ struct LearningInsightsWorkspaceView: View {
                 .scrollContentBackground(.hidden)
                 .padding(10)
                 .frame(minHeight: 140)
-                .background(Color.white.opacity(0.70))
+                .background(Color.studySurfaceRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                        .stroke(Color.studyBorderSoft, lineWidth: 1)
                 )
                 .overlay(alignment: .topLeading) {
                     if text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -918,11 +974,11 @@ struct LearningInsightsWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(Color.white.opacity(0.72))
+        .background(Color.studySurfaceRaised)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
         )
     }
 
@@ -961,11 +1017,11 @@ struct LearningInsightsWorkspaceView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.70))
+        .background(Color.studySurfaceRaised)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
         )
     }
 
@@ -991,13 +1047,6 @@ struct LearningInsightsWorkspaceView: View {
     private func matchConcept(named title: String, in analysis: LectureCompletenessAnalysis) -> LectureCoverageItem? {
         let allItems = analysis.missingConcepts + analysis.partiallyCapturedConcepts + analysis.wellCoveredConcepts
         return allItems.first(where: { $0.title.localizedCaseInsensitiveCompare(title) == .orderedSame })
-    }
-
-    private func updatePreview(for concept: LectureCoverageItem, in analysis: LectureCompletenessAnalysis?) {
-        generatedPreview = previewText(for: concept, mode: previewMode)
-        if let analysis, selectedConcept?.id == concept.id {
-            statusMessage = analysis.summary
-        }
     }
 
     private func coverageTint(for score: Double) -> Color {
@@ -1047,8 +1096,8 @@ struct LearningInsightsWorkspaceView: View {
     private var glassSurface: some View {
         LinearGradient(
             colors: [
-                Color.white.opacity(0.88),
-                Color(red: 0.96, green: 0.94, blue: 0.89).opacity(0.88)
+                Color.studySurfaceRaised,
+                Color.studySurface
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -1056,15 +1105,15 @@ struct LearningInsightsWorkspaceView: View {
     }
 
     private var glassCard: some View {
-        Color.white.opacity(0.60)
+        Color.studySurface
     }
 
     private var backgroundLayer: some View {
         LinearGradient(
             colors: [
-                Color(red: 0.95, green: 0.96, blue: 0.98),
-                Color(red: 0.91, green: 0.94, blue: 0.96),
-                Color(red: 0.97, green: 0.94, blue: 0.90)
+                Color.studySurfaceRaised,
+                Color.studySurface,
+                Color.studySurfaceMuted
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -1088,32 +1137,13 @@ struct LearningInsightsWorkspaceView: View {
     }
 }
 
-private enum InsightPreviewMode: String, CaseIterable, Identifiable {
-    case explanation
-    case flashcards
-    case quiz
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .explanation:
-            return "Explanation"
-        case .flashcards:
-            return "Flashcards"
-        case .quiz:
-            return "Quiz"
-        }
-    }
-}
-
 private struct CoverageRing: View {
     let score: Int
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.black.opacity(0.08), lineWidth: 10)
+                .stroke(Color.studyBorderSoft, lineWidth: 10)
 
             Circle()
                 .trim(from: 0, to: CGFloat(score) / 100)

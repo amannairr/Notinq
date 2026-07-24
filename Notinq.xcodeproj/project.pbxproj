@@ -22,6 +22,7 @@
 		07B462B02FA77B87009B2513 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AF2FA77B87009B2513 /* Accelerate.framework */; };
 		07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */ = {isa = PBXBuildFile; fileRef = 07B462B12FA77BDB009B2513 /* ggml-base.en.bin */; };
 		07B462BB2FA7A2F6009B2513 /* LlamaBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */; };
+		07F7A0012FB8000100AA1001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07F7A0002FB8000100AA1001 /* XCTest.framework */; };
 		8A1D01012FB1000200AA1001 /* libllama.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A1D01022FB1000200AA1001 /* libllama.a */; };
 /* End PBXBuildFile section */
 
@@ -63,6 +64,7 @@
 		07B462B12FA77BDB009B2513 /* ggml-base.en.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = "ggml-base.en.bin"; path = "../../../models/ggml-base.en.bin"; sourceTree = "<group>"; };
 		07B462B92FA7A2F6009B2513 /* LlamaBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LlamaBridge.h; sourceTree = "<group>"; };
 		07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LlamaBridge.mm; sourceTree = "<group>"; };
+		07F7A0002FB8000100AA1001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		8A1D01022FB1000200AA1001 /* libllama.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libllama.a; path = "ThirdParty/llama-libs/libllama.a"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -71,7 +73,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				Untitled.swift,
 			);
 			target = 07279D8A2F8AA40300A1D363 /* Notinq */;
 		};
@@ -118,6 +119,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				07F7A0012FB8000100AA1001 /* XCTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,6 +133,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		070667C7300C1BBF002CE5C1 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				07F7A0002FB8000100AA1001 /* XCTest.framework */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		07279D822F8AA40300A1D363 = {
 			isa = PBXGroup;
 			children = (
@@ -149,6 +159,7 @@
 				07B462B92FA7A2F6009B2513 /* LlamaBridge.h */,
 				07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */,
 				07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */,
+				070667C7300C1BBF002CE5C1 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};

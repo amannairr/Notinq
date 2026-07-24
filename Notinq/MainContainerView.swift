@@ -11,9 +11,7 @@ import AppKit
 
 struct MainContainerView: View {
 
-    @StateObject private var appState = AppState()
-    @State private var showCommandBar = false
-    @State private var selectedMode: AppMode = .notes
+    @ObservedObject var appState: AppState
     @State private var studyPanelWidth: CGFloat = 410
 
     // Panel widths
@@ -25,12 +23,14 @@ struct MainContainerView: View {
     @State private var isSidebarCollapsed = false
     @State private var isNotesCollapsed = false
 
-    @State private var showLearningInsightsPanel = false
+    init(appState: AppState) {
+        self.appState = appState
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                HStack(spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                HStack(alignment: .top, spacing: 0) {
 
                     ModeBarView(selectedMode: $appState.selectedMode)
                         .frame(width: 80)
@@ -110,66 +110,118 @@ struct MainContainerView: View {
                         )
                     }
 
-                    ZStack {
-                        switch appState.selectedMode {
-                        case .notes, .study:
-                            if appState.selectedMode == .study {
-                                StudyView(
-                                    noteID: currentNoteID,
+                    GeometryReader { editorProxy in
+                        ZStack {
+                            switch appState.selectedMode {
+                            case .notes, .study:
+                                if appState.selectedMode == .study {
+                                    StudyView(
+                                        noteID: currentNoteID,
+                                        noteTitle: currentNoteTitle,
+                                        noteText: currentNoteText,
+                                        selectedText: "",
+                                        lastUpdatedAt: currentNoteUpdatedAt,
+                                        noteHasContent: !currentNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                        studyData: currentStudyData,
+                                        autoGenerateStudyMaterialsRequestID: appState.pendingStudyGenerationRequestID,
+                                        isGenerating: false,
+                                        generationStatus: "Generating study materials...",
+                                        generationSummary: nil,
+                                        statusMessage: nil,
+                                        statusTone: .neutral,
+                                        onGenerateMaterials: {
+                                            appState.requestStudyGeneration()
+                                        },
+                                        onAutoGenerateStudyMaterialsConsumed: {
+                                            appState.consumeStudyGenerationRequest()
+                                        },
+                                        onClose: { appState.selectedMode = .notes },
+                                        onExplainSimply: { insertStudyContentIntoCurrentNote(explainCurrentNoteSimply()) },
+                                        onGiveExample: { insertStudyContentIntoCurrentNote(explainCurrentNoteExample()) },
+                                        onCompareConcepts: { insertStudyContentIntoCurrentNote(explainCurrentNoteComparison()) },
+                                        onCreateAnalogy: { insertStudyContentIntoCurrentNote(explainCurrentNoteAnalogy()) },
+                                        onMarkFlashcardReviewed: { card in markFlashcardReviewed(card) },
+                                        onRecordQuizAttempt: { quizSet, score, totalQuestions in
+                                            recordQuizAttempt(quizSet: quizSet, score: score, totalQuestions: totalQuestions)
+                                        },
+                                        onEvaluateTestMe: { question, answer, completion in
+                                            evaluateTestMe(question: question, answer: answer, completion: completion)
+                                        },
+                                        onRecordTestMeSession: { score, totalQuestions, concepts in
+                                            recordTestMeSession(score: score, totalQuestions: totalQuestions, concepts: concepts)
+                                        },
+                                        onInsertContent: { text in insertStudyContentIntoCurrentNote(text) },
+                                        panelWidth: $studyPanelWidth
+                                    )
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                } else {
+                                    EditorView(
+                                        onAnalyzeLecture: analyzeLecture,
+                                        onUpdateKnowledgeGraph: updateCurrentKnowledgeGraph,
+                                        onGenerateStudyMaterials: {
+                                            appState.requestStudyGeneration()
+                                        }
+                                    )
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                }
+                            case .ai:
+                                AIWorkspaceView(
                                     noteTitle: currentNoteTitle,
                                     noteText: currentNoteText,
-                                    selectedText: "",
-                                    lastUpdatedAt: currentNoteUpdatedAt,
-                                    noteHasContent: !currentNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                                    studyData: currentStudyData,
-                                    isGenerating: false,
-                                    generationStatus: "Generating study materials...",
-                                    generationSummary: nil,
-                                    statusMessage: nil,
-                                    statusTone: .neutral,
-                                    onGenerateMaterials: {},
-                                    onClose: { appState.selectedMode = .notes },
-                                    onExplainSimply: { insertStudyContentIntoCurrentNote(explainCurrentNoteSimply()) },
-                                    onGiveExample: { insertStudyContentIntoCurrentNote(explainCurrentNoteExample()) },
-                                    onCompareConcepts: { insertStudyContentIntoCurrentNote(explainCurrentNoteComparison()) },
-                                    onCreateAnalogy: { insertStudyContentIntoCurrentNote(explainCurrentNoteAnalogy()) },
-                                    onMarkFlashcardReviewed: { card in markFlashcardReviewed(card) },
-                                    onRecordQuizAttempt: { quizSet, score, totalQuestions in
-                                        recordQuizAttempt(quizSet: quizSet, score: score, totalQuestions: totalQuestions)
-                                    },
-                                    onEvaluateTestMe: { question, answer, completion in
-                                        evaluateTestMe(question: question, answer: answer, completion: completion)
-                                    },
-                                    onRecordTestMeSession: { score, totalQuestions, concepts in
-                                        recordTestMeSession(score: score, totalQuestions: totalQuestions, concepts: concepts)
-                                    },
-                                    onInsertContent: { text in insertStudyContentIntoCurrentNote(text) },
-                                    panelWidth: $studyPanelWidth
+                                    lastUpdatedAt: currentNoteUpdatedAt
                                 )
-                            } else {
-                                EditorView(
-                                    onAnalyzeLecture: analyzeLecture,
-                                    onUpdateKnowledgeGraph: updateCurrentKnowledgeGraph
-                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            case .search:
+                                SearchView()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             }
-                        case .ai:
-                            AIWorkspaceView(
-                                noteTitle: currentNoteTitle,
-                                noteText: currentNoteText,
-                                lastUpdatedAt: currentNoteUpdatedAt
-                            )
-                        case .search:
-                            SearchView()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .background(Color.bgEditor)
+                        .shadow(color: .black.opacity(0.045), radius: 22, x: -10, y: 0)
+                        .animation(.easeInOut(duration: 0.15), value: appState.selectedMode)
+                        .overlay(alignment: .trailing) {
+                            if appState.isLearningInsightsOpen, let currentNoteID {
+                                Color.black.opacity(0.18)
+                                    .frame(width: editorProxy.size.width, height: editorProxy.size.height)
+                                    .onTapGesture {
+                                        appState.closeLearningInsights()
+                                    }
+
+                                LearningInsightsWorkspaceView(
+                                    noteTitle: currentNoteTitle,
+                                    studentNotes: currentNoteText,
+                                    initialAnalysis: currentStudyData.learningInsights.hasResults ? currentStudyData.learningInsights : nil,
+                                    onSaveAnalysis: { result in
+                                        appState.updateLearningInsights(result, for: currentNoteID)
+                                    },
+                                    onInsertIntoNote: { text in
+                                        insertStudyContentIntoCurrentNote(text)
+                                    },
+                                    onClose: {
+                                        appState.closeLearningInsights()
+                                    }
+                                )
+                                .frame(
+                                    width: Self.learningInsightsPanelSize(for: editorProxy.size).width,
+                                    height: Self.learningInsightsPanelSize(for: editorProxy.size).height
+                                )
+                                .padding(.trailing, 18)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                                .zIndex(20)
+                            }
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.bgEditor)
-                    .shadow(color: .black.opacity(0.045), radius: 22, x: -10, y: 0)
-                    .animation(.easeInOut(duration: 0.15), value: appState.selectedMode)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                if showCommandBar {
-                    CommandBarView(isVisible: $showCommandBar)
+                if appState.isCommandBarOpen {
+                    CommandBarView(isVisible: Binding(
+                        get: { appState.isCommandBarOpen },
+                        set: { appState.isCommandBarOpen = $0 }
+                    ))
                 }
 
                 if appState.isSettingsOpen {
@@ -179,37 +231,8 @@ struct MainContainerView: View {
                         .zIndex(10)
                 }
 
-                if showLearningInsightsPanel {
-                    Color.black.opacity(0.18)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            showLearningInsightsPanel = false
-                        }
-                        .transition(.opacity)
-
-                    if let currentNoteID {
-                        LearningInsightsWorkspaceView(
-                            noteTitle: currentNoteTitle,
-                            studentNotes: currentNoteText,
-                            initialAnalysis: currentStudyData.learningInsights.hasResults ? currentStudyData.learningInsights : nil,
-                            onSaveAnalysis: { result in
-                                appState.updateLearningInsights(result, for: currentNoteID)
-                            },
-                            onInsertIntoNote: { text in
-                                insertStudyContentIntoCurrentNote(text)
-                            },
-                            onClose: {
-                                showLearningInsightsPanel = false
-                            }
-                        )
-                        .frame(width: min(max(proxy.size.width * 0.74, 860), 1160), height: min(proxy.size.height - 24, 840))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                        .padding(.trailing, 18)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                        .zIndex(20)
-                    }
-                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .background(Color.bgPrimary)
             .environmentObject(appState)
             .onAppear {
@@ -219,7 +242,7 @@ struct MainContainerView: View {
     }
 
     private func analyzeLecture() {
-        showLearningInsightsPanel = true
+        appState.openLearningInsights()
     }
 
     private func updateCurrentKnowledgeGraph() {
@@ -231,6 +254,15 @@ struct MainContainerView: View {
             updatedAt: currentNoteUpdatedAt ?? Date()
         )
         KnowledgeGraphManager.shared.generateGraph(note: note)
+    }
+
+    static func learningInsightsPanelSize(for editorSize: CGSize) -> CGSize {
+        let preferredWidth = min(max(editorSize.width * 0.74, 860), 1160)
+        let preferredHeight = min(editorSize.height - 24, 840)
+        return CGSize(
+            width: min(preferredWidth, max(0, editorSize.width - 36)),
+            height: max(0, preferredHeight)
+        )
     }
 
     private var currentNoteID: UUID? {
@@ -558,19 +590,84 @@ extension MainContainerView {
 
     func setupKeyboardShortcuts() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-
-            if event.modifierFlags.contains(.command) {
-                switch event.charactersIgnoringModifiers {
-                case "1": appState.selectedMode = .notes
-                case "2": appState.selectedMode = .ai
-                case "3": appState.selectedMode = .study
-                case "4": appState.selectedMode = .search
-                case "k": showCommandBar.toggle()
-                default: break
+            if let shortcut = Self.shortcutAction(for: event) {
+                switch shortcut {
+                case .notes:
+                    appState.selectedMode = .notes
+                case .ai:
+                    appState.selectedMode = .ai
+                case .study:
+                    appState.selectedMode = .study
+                case .search:
+                    appState.selectedMode = .search
+                case .commandBar:
+                    appState.toggleCommandBar()
+                case .settings:
+                    appState.isSettingsOpen = true
+                case .learningInsights:
+                    appState.openLearningInsights()
+                case .newNote:
+                    appState.createNoteInSelectedFolder()
+                    appState.selectedMode = .notes
+                case .generateStudyMaterials:
+                    appState.requestStudyGeneration()
                 }
             }
 
             return event
         }
+    }
+
+    static func shortcutAction(
+        forCharacters characters: String,
+        modifiers: NSEvent.ModifierFlags
+    ) -> ShortcutAction? {
+        let normalized = characters.lowercased()
+        let hasCommand = modifiers.contains(.command)
+        let hasShift = modifiers.contains(.shift)
+
+        guard hasCommand else { return nil }
+
+        switch (normalized, hasShift) {
+        case ("1", false):
+            return .notes
+        case ("2", false):
+            return .ai
+        case ("3", false):
+            return .study
+        case ("4", false):
+            return .search
+        case ("k", false):
+            return .commandBar
+        case (",", false):
+            return .settings
+        case ("i", true):
+            return .learningInsights
+        case ("n", false):
+            return .newNote
+        case ("g", true):
+            return .generateStudyMaterials
+        default:
+            return nil
+        }
+    }
+
+    enum ShortcutAction: Equatable {
+        case notes
+        case ai
+        case study
+        case search
+        case commandBar
+        case settings
+        case learningInsights
+        case newNote
+        case generateStudyMaterials
+    }
+
+    static func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        shortcutAction(
+            forCharacters: event.charactersIgnoringModifiers ?? "",
+            modifiers: event.modifierFlags
+        )
     }
 }

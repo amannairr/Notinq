@@ -54,7 +54,10 @@ void *PLWhisperCreate(const char *modelPath, int threads) {
     if (!modelPath) { return nullptr; }
     auto *handle = new PLWhisperHandle();
     handle->threads = threads > 0 ? threads : 1;
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     handle->ctx = whisper_init_from_file(modelPath);
+    #pragma clang diagnostic pop
     if (!handle->ctx) {
         delete handle;
         return nullptr;
@@ -163,7 +166,10 @@ void PLWhisperFreeCString(char *ptr) {
 
     _threads = MAX(1, threads);
 #if WHISPER_BRIDGE_ENABLED
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     _ctx = whisper_init_from_file([modelPath UTF8String]);
+    #pragma clang diagnostic pop
     if (!_ctx) {
         return nil;
     }

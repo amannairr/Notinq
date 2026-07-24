@@ -22,10 +22,10 @@ struct SidebarView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Color.textPrimary)
                 Spacer()
-                CircleButton(icon: "plus") {
+                CircleButton(icon: "plus", label: "New Folder") {
                     appState.createFolder()
                 }
-                CircleButton(icon: "sidebar.left") {
+                CircleButton(icon: "sidebar.left", label: "Collapse sidebar") {
                     isCollapsed = true
                 }
             }

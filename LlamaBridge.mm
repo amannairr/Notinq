@@ -6,10 +6,16 @@
 #import <vector>
 
 #if defined(LLAMA_BRIDGE_FORCE_ENABLE) && __has_include("llama.h")
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdocumentation"
 #import "llama.h"
+#pragma clang diagnostic pop
 #define LLAMA_BRIDGE_ENABLED 1
 #elif defined(LLAMA_BRIDGE_FORCE_ENABLE) && __has_include(<llama.h>)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdocumentation"
 #import <llama.h>
+#pragma clang diagnostic pop
 #define LLAMA_BRIDGE_ENABLED 1
 #else
 #define LLAMA_BRIDGE_ENABLED 0

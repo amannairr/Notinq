@@ -51,6 +51,7 @@ extension NSAttributedString.Key {
     static let aiBlockID = NSAttributedString.Key("NotinqAIBlockID")
     static let aiBlockRole = NSAttributedString.Key("NotinqAIBlockRole")
     static let aiBlockActionTitle = NSAttributedString.Key("NotinqAIBlockActionTitle")
+    static let aiBlockInsertedAt = NSAttributedString.Key("NotinqAIBlockInsertedAt")
 }
 
 extension HeadingLevel {
@@ -284,7 +285,7 @@ class TextViewBridge {
 
     func insertAIResult(action: AIAction, response: String, selectionRange: NSRange) {
         guard let tv = textView, let storage = tv.textStorage else { return }
-        let cleaned = cleanGeneratedText(response)
+        let cleaned = Self.cleanGeneratedText(response)
         guard !cleaned.isEmpty else { return }
 
         let insertionIndex = safeInsertionIndex(after: selectionRange, textLength: storage.length)
@@ -300,6 +301,7 @@ class TextViewBridge {
         storage.beginEditing()
         storage.insert(insertString, at: insertionIndex)
         storage.endEditing()
+        markRecentInsertion(in: tv, range: NSRange(location: insertionIndex, length: insertString.length))
 
         let cursor = insertionIndex + insertString.length - 1
         tv.setSelectedRange(NSRange(location: cursor, length: 0))
@@ -326,6 +328,7 @@ class TextViewBridge {
         storage.beginEditing()
         storage.insert(header, at: insertionIndex)
         storage.endEditing()
+        markRecentInsertion(in: tv, range: NSRange(location: insertionIndex, length: header.length))
 
         let start = insertionIndex + header.length
         aiStreamingRange = NSRange(location: start, length: 0)
@@ -369,16 +372,14 @@ class TextViewBridge {
            range.location >= 0,
            range.location + range.length <= storage.length {
             let raw = (tv.string as NSString).substring(with: range)
-            let cleaned = cleanGeneratedText(raw)
+            let cleaned = Self.cleanGeneratedText(raw)
+            let rendered = renderMarkdownContent(cleaned, blockID: blockID)
             storage.beginEditing()
             storage.replaceCharacters(
                 in: range,
-                with: NSAttributedString(
-                    string: cleaned,
-                    attributes: aiBlockContentAttributes(blockID: blockID)
-                )
+                with: rendered
             )
-            let end = range.location + (cleaned as NSString).length
+            let end = range.location + rendered.length
             let trailing = NSAttributedString(string: "\n", attributes: normalTypingAttributes())
             storage.insert(trailing, at: end)
             storage.endEditing()
@@ -496,7 +497,7 @@ class TextViewBridge {
     ) -> NSAttributedString {
         let block = NSMutableAttributedString()
         block.append(makeAIBlockHeader(actionTitle: actionTitle, blockID: blockID, leadingSpacing: leadingSpacing))
-        block.append(NSAttributedString(string: content, attributes: aiBlockContentAttributes(blockID: blockID)))
+        block.append(renderMarkdownContent(content, blockID: blockID))
         block.append(NSAttributedString(string: trailingSpacing, attributes: normalTypingAttributes()))
         return block
     }
@@ -511,15 +512,20 @@ class TextViewBridge {
             block.append(NSAttributedString(string: leadingSpacing, attributes: normalTypingAttributes()))
         }
 
-        let label = "\(actionTitle) · Generated\n"
-        block.append(NSAttributedString(string: label, attributes: aiBlockLabelAttributes(blockID: blockID, actionTitle: actionTitle)))
+        block.append(aiGeneratedBadge(actionTitle: actionTitle, blockID: blockID))
+        block.append(NSAttributedString(string: "\n", attributes: normalTypingAttributes()))
         return block
     }
 
     private func aiBlockLabelAttributes(blockID: String, actionTitle: String) -> [NSAttributedString.Key: Any] {
         var attributes = aiBlockBaseAttributes(blockID: blockID, role: "label")
-        attributes[.font] = NSFont.systemFont(ofSize: 11, weight: .medium)
-        attributes[.foregroundColor] = NSColor(calibratedRed: 0.43, green: 0.41, blue: 0.37, alpha: 0.86)
+        attributes[.font] = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        attributes[.foregroundColor] = NSColor(calibratedRed: 0.38, green: 0.45, blue: 0.48, alpha: 1.0)
+        attributes[.backgroundColor] = NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(calibratedRed: 0.24, green: 0.27, blue: 0.29, alpha: 0.88)
+                : NSColor(calibratedRed: 0.90, green: 0.94, blue: 0.95, alpha: 0.96)
+        }
         attributes[.aiBlockActionTitle] = actionTitle
         return attributes
     }
@@ -527,7 +533,11 @@ class TextViewBridge {
     private func aiBlockContentAttributes(blockID: String) -> [NSAttributedString.Key: Any] {
         var attributes = aiBlockBaseAttributes(blockID: blockID, role: "content")
         attributes[.font] = NSFont.systemFont(ofSize: 15.5, weight: .regular)
-        attributes[.foregroundColor] = NSColor(calibratedRed: 0.25, green: 0.24, blue: 0.22, alpha: 1.0)
+        attributes[.foregroundColor] = NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(calibratedRed: 0.90, green: 0.89, blue: 0.87, alpha: 1.0)
+                : NSColor(calibratedRed: 0.22, green: 0.22, blue: 0.21, alpha: 1.0)
+        }
         return attributes
     }
 
@@ -543,8 +553,25 @@ class TextViewBridge {
         return [
             .paragraphStyle: paragraph,
             .aiBlockID: blockID,
-            .aiBlockRole: role
+            .aiBlockRole: role,
+            .aiBlockInsertedAt: Date()
         ]
+    }
+
+    private func aiGeneratedBadge(actionTitle: String, blockID: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        if let symbol = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold)) {
+            let attachment = NSTextAttachment()
+            attachment.image = symbol
+            attachment.bounds = CGRect(x: 0, y: -1, width: 11, height: 11)
+            result.append(NSAttributedString(attachment: attachment))
+            result.append(NSAttributedString(string: " "))
+        }
+
+        let label = "\(actionTitle) · Generated"
+        result.append(NSAttributedString(string: label, attributes: aiBlockLabelAttributes(blockID: blockID, actionTitle: actionTitle)))
+        return result
     }
 
     private func normalTypingAttributes() -> [NSAttributedString.Key: Any] {
@@ -557,30 +584,66 @@ class TextViewBridge {
         return attributes
     }
 
-    private func cleanGeneratedText(_ text: String) -> String {
+    static func cleanGeneratedText(_ text: String) -> String {
         let normalized = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
 
-        let lines = normalized
+        let rawLines = normalized
             .components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
         var cleanedLines: [String] = []
         var previousWasEmpty = false
-        for line in lines {
-            let isEmpty = line.isEmpty
-            if isEmpty, previousWasEmpty {
+        var lastMeaningfulLine: String?
+        var lastSectionTitle: String?
+
+        for line in rawLines {
+            let normalizedLine = line
+            if normalizedLine.isEmpty {
+                if previousWasEmpty || cleanedLines.isEmpty {
+                    continue
+                }
+                cleanedLines.append("")
+                previousWasEmpty = true
                 continue
             }
-            cleanedLines.append(line)
-            previousWasEmpty = isEmpty
+
+            previousWasEmpty = false
+
+            if isPromptArtifactLine(normalizedLine) {
+                continue
+            }
+
+            if let semanticTitle = semanticSectionTitle(for: normalizedLine) {
+                if lastSectionTitle == semanticTitle {
+                    continue
+                }
+                cleanedLines.append("## \(semanticTitle)")
+                lastSectionTitle = semanticTitle
+                lastMeaningfulLine = semanticTitle
+                continue
+            }
+
+            if normalizedLine == lastMeaningfulLine {
+                continue
+            }
+
+            cleanedLines.append(normalizedLine)
+            lastMeaningfulLine = normalizedLine
+            lastSectionTitle = nil
         }
 
-        let cleaned = cleanedLines
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = cleanedLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return LlamaContext.sanitizeOutputText(cleaned)
+    }
+
+    private func renderMarkdownContent(_ content: String, blockID: String) -> NSAttributedString {
+        MarkdownRichTextRenderer.render(
+            content,
+            baseFontSize: 15.5,
+            baseAttributes: aiBlockContentAttributes(blockID: blockID)
+        )
     }
 
     private func leadingSpacing(at insertionIndex: Int, in text: String) -> String {
@@ -595,6 +658,69 @@ class TextViewBridge {
         let location = min(max(0, range.location), textLength)
         let length = min(max(0, range.length), textLength - location)
         return location + length
+    }
+
+    private func markRecentInsertion(in textView: NSTextView, range: NSRange) {
+        guard let storage = textView.textStorage, range.length > 0 else { return }
+        let highlightUntil = Date().addingTimeInterval(0.9)
+        storage.addAttribute(.aiBlockInsertedAt, value: highlightUntil, range: range)
+        textView.needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak textView] in
+            textView?.needsDisplay = true
+        }
+    }
+
+    private static func isPromptArtifactLine(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        let artifactPhrases = [
+            "student response",
+            "avoid repetition",
+            "final sentence",
+            "generated:",
+            "you are helping edit a student note",
+            "note context:",
+            "selected text:",
+            "instruction:",
+            "please provide your answer clearly",
+            "do not use the exact words",
+            "to be clear,",
+            "the selected passage",
+            "you are not editing the note",
+            "note:",
+            "notes:"
+        ]
+        return artifactPhrases.contains { lower.contains($0) }
+    }
+
+    private static func semanticSectionTitle(for line: String) -> String? {
+        let normalized = line
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: ":", with: "")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+        return [
+            "question": "Question",
+            "questions": "Question",
+            "answer": "Answer",
+            "answers": "Answer",
+            "explanation": "Explanation",
+            "explanations": "Explanation",
+            "summary": "Summary",
+            "summaries": "Summary",
+            "key point": "Key Points",
+            "key points": "Key Points",
+            "keypoints": "Key Points",
+            "flashcard": "Flashcards",
+            "flashcards": "Flashcards",
+            "quiz": "Quiz",
+            "review": "Review",
+            "reviews": "Review",
+            "example": "Example",
+            "examples": "Example",
+            "notes": "Notes",
+            "note": "Notes"
+        ][normalized]
     }
 
     private func fullRangeForAIBlock(id blockID: String, in storage: NSTextStorage) -> NSRange {

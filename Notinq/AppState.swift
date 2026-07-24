@@ -26,6 +26,9 @@ class AppState: ObservableObject {
     @Published var selectedFolderID: UUID?
     @Published var selectedNoteID: UUID?
     @Published var isSettingsOpen: Bool = false
+    @Published var isCommandBarOpen: Bool = false
+    @Published var isLearningInsightsOpen: Bool = false
+    @Published var pendingStudyGenerationRequestID: UUID?
     @Published var isLoggedIn: Bool = false
     @Published var userEmail: String?
     @Published var aiMode: AIMode = .auto
@@ -75,6 +78,35 @@ class AppState: ObservableObject {
     func refreshAuthState() {
         isLoggedIn = AuthService.shared.isLoggedIn
         userEmail = AuthService.shared.userEmail
+    }
+
+    func openCommandBar() {
+        isCommandBarOpen = true
+    }
+
+    func closeCommandBar() {
+        isCommandBarOpen = false
+    }
+
+    func toggleCommandBar() {
+        isCommandBarOpen.toggle()
+    }
+
+    func openLearningInsights() {
+        isLearningInsightsOpen = true
+    }
+
+    func closeLearningInsights() {
+        isLearningInsightsOpen = false
+    }
+
+    func requestStudyGeneration() {
+        pendingStudyGenerationRequestID = UUID()
+        selectedMode = .study
+    }
+
+    func consumeStudyGenerationRequest() {
+        pendingStudyGenerationRequestID = nil
     }
 
     func createFolder() {

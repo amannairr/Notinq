@@ -10,6 +10,7 @@ import SwiftUI
 struct CircleButton: View {
 
     let icon: String
+    let label: String?
     var action: () -> Void = {}
 
     @State private var hover = false
@@ -37,11 +38,23 @@ struct CircleButton: View {
                 .animation(.easeInOut(duration: 0.14), value: hover)
         }
         .buttonStyle(.plain)
+        .help(label ?? iconTooltip)
         .onHover { hover = $0 }
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in pressed = true }
                 .onEnded { _ in pressed = false }
         )
+    }
+
+    private var iconTooltip: String {
+        switch icon {
+        case "plus":
+            return "Add"
+        case "sidebar.left":
+            return "Collapse pane"
+        default:
+            return icon
+        }
     }
 }

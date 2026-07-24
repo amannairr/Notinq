@@ -42,22 +42,7 @@ struct ToolbarToggleButton: View {
                 .scaleEffect(isPressed ? 0.96 : 1.0)
         }
         .buttonStyle(.plain)
-
-        .overlay(alignment: .top) {
-
-            if hover {
-                tooltip
-                    .offset(x: 0, y: -38)
-                    .allowsHitTesting(false)
-                    .transition(
-                        .opacity.combined(
-                            with: .scale(scale: 0.96)
-                        )
-                    )
-                    .zIndex(1000)
-            }
-        }
-
+        .help(label)
         .onHover { hovering in
             withAnimation(
                 .spring(
@@ -68,7 +53,6 @@ struct ToolbarToggleButton: View {
                 hover = hovering
             }
         }
-
         .onLongPressGesture(
             minimumDuration: 0,
             pressing: { pressing in
@@ -76,7 +60,6 @@ struct ToolbarToggleButton: View {
             },
             perform: {}
         )
-
         .animation(
             .spring(
                 response: 0.18,
