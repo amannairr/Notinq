@@ -204,7 +204,7 @@ struct AIWorkspaceView: View {
                     icon: "doc.text",
                     tint: Color(red: 0.23, green: 0.47, blue: 0.59)
                 ) {
-                    runPresetAction("Summarize this note in 5 bullets.")
+                    runPresetAction(.summarize)
                 }
 
                 actionCard(
@@ -213,7 +213,7 @@ struct AIWorkspaceView: View {
                     icon: "pencil.and.outline",
                     tint: Color(red: 0.46, green: 0.32, blue: 0.21)
                 ) {
-                    runPresetAction("Rewrite this note to be clearer and more readable.")
+                    runPresetAction(.rewrite)
                 }
 
                 actionCard(
@@ -222,7 +222,7 @@ struct AIWorkspaceView: View {
                     icon: "lightbulb",
                     tint: Color(red: 0.32, green: 0.56, blue: 0.38)
                 ) {
-                    runPresetAction("Explain the most important concept in this note simply.")
+                    runPresetAction(.explain)
                 }
 
                 actionCard(
@@ -231,7 +231,7 @@ struct AIWorkspaceView: View {
                     icon: "rectangle.stack",
                     tint: Color(red: 0.54, green: 0.38, blue: 0.61)
                 ) {
-                    runPresetAction("Create 5 flashcards from the note.")
+                    runPresetAction(.flashcards)
                 }
 
                 actionCard(
@@ -240,7 +240,7 @@ struct AIWorkspaceView: View {
                     icon: "checklist",
                     tint: Color(red: 0.60, green: 0.45, blue: 0.20)
                 ) {
-                    runPresetAction("Generate a short quiz from this note.")
+                    runPresetAction(.quiz)
                 }
 
                 actionCard(
@@ -249,7 +249,7 @@ struct AIWorkspaceView: View {
                     icon: "tray.full",
                     tint: Color(red: 0.27, green: 0.43, blue: 0.55)
                 ) {
-                    runPresetAction("Extract the key points from this note.")
+                    runPresetAction(.keyPoints)
                 }
             }
         }
@@ -391,7 +391,8 @@ struct AIWorkspaceView: View {
         .buttonStyle(.plain)
     }
 
-    private func runPresetAction(_ prompt: String) {
+    private func runPresetAction(_ preset: AIWorkspacePreset) {
+        let prompt = PromptRegistry.shared.workspacePresetRequest(for: preset)
         inputText = prompt
         sendMessage(prompt)
     }
@@ -406,19 +407,7 @@ struct AIWorkspaceView: View {
         inputText = ""
         isSending = true
 
-        let prompt = """
-        You are Notinq's AI assistant. Be concise, useful, and grounded in the current note.
-        Current note title: \(noteTitle)
-        Current note text:
-        \(truncate(noteText, limit: 4000))
-
-        User request:
-        \(trimmed)
-
-        Respond in a clear, note-aware way. If the user asks for study material, structure it for a student.
-        """
-
-        AIService.shared.run(prompt: prompt, contextLength: max(noteText.count, 256), kind: .ask) { response in
+        AIService.shared.chat(noteTitle: noteTitle, noteText: truncate(noteText, limit: 4000), userRequest: trimmed) { response in
             let cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
             messages.append(
                 AIWorkspaceMessage(

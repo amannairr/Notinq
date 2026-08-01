@@ -526,14 +526,8 @@ private struct HorizontalScrollOffsetReader: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: OffsetTrackingView, context: Context) {
-        nsView.onOffsetChange = { offset in
-            self.offset = offset
-        }
-        nsView.onScrollViewChange = { scrollView in
-            self.scrollView = scrollView
-        }
-    }
+    func updateNSView(_ nsView: OffsetTrackingView, context: Context) {}
+
 }
 
 private struct ToolbarContentWidthPreferenceKey: PreferenceKey {

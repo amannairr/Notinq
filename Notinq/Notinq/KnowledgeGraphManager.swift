@@ -152,7 +152,9 @@ final class KnowledgeGraphManager: ObservableObject {
         pendingRequestIDByNoteID[note.noteID] = UUID()
         let requestID = pendingRequestIDByNoteID[note.noteID]
 
-        generationStateByNoteID[note.noteID] = KnowledgeGraphStatusSnapshot(isGenerating: true, message: "Updating knowledge graph...", lastUpdated: snapshot.graphs.first(where: { $0.noteID == note.noteID })?.lastUpdated)
+        DispatchQueue.main.async {
+            self.generationStateByNoteID[note.noteID] = KnowledgeGraphStatusSnapshot(isGenerating: true, message: "Updating knowledge graph...", lastUpdated: self.snapshot.graphs.first(where: { $0.noteID == note.noteID })?.lastUpdated)
+        }
         extractionService.cancelCurrentExtraction()
 
         extractionService.extractGraph(from: note) { [weak self] result in
@@ -174,6 +176,7 @@ final class KnowledgeGraphManager: ObservableObject {
                             message: "Knowledge graph updated.",
                             lastUpdated: graph.lastUpdated
                         )
+                        NotificationCenter.default.post(name: .knowledgeGraphDidChange, object: note.noteID)
                     }
 
                 case .failure(let error):
@@ -183,6 +186,7 @@ final class KnowledgeGraphManager: ObservableObject {
                             message: error.localizedDescription,
                             lastUpdated: self.snapshot.graphs.first(where: { $0.noteID == note.noteID })?.lastUpdated
                         )
+                        NotificationCenter.default.post(name: .knowledgeGraphDidChange, object: note.noteID)
                     }
                 }
             }
@@ -212,7 +216,12 @@ final class KnowledgeGraphManager: ObservableObject {
             }
         }
 
-        let nameToID = Dictionary(uniqueKeysWithValues: resolvedConcepts.map { (RelationshipBuilder.normalizedKey(for: $0.name), $0.id) })
+        let nameToID = resolvedConcepts.reduce(into: [String: UUID]()) { result, concept in
+            let key = RelationshipBuilder.normalizedKey(for: concept.name)
+            if result[key] == nil {
+                result[key] = concept.id
+            }
+        }
 
         let relationships = dedupeRelationships(
             payload.relationships.compactMap { relationship -> ConceptRelationship? in
@@ -390,6 +399,12 @@ final class KnowledgeGraphManager: ObservableObject {
                 lastUpdated: graph.lastUpdated
             )
         }
-        graphsByNoteID = cache
+        if Thread.isMainThread {
+            graphsByNoteID = cache
+        } else {
+            DispatchQueue.main.async { [cache] in
+                self.graphsByNoteID = cache
+            }
+        }
     }
 }

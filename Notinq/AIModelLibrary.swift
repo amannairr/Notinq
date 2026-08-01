@@ -81,25 +81,17 @@ enum AIModelLibraryError: LocalizedError {
 
 final class AIModelLibrary {
     static let shared = AIModelLibrary()
+    private static let defaultPreferredModelID = "qwen-3-4b"
 
     private let defaults = UserDefaults.standard
     private let preferredModelKey = "notinq.preferredAIModelID"
     private let catalog: [AIModelDefinition] = [
         AIModelDefinition(
-            id: "qwen-2.5-1.5b",
-            displayName: "Qwen 2.5 1.5B Instruct",
-            fileName: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
-            tier: .standard,
-            summary: "Default low-RAM local generation model.",
-            downloadURL: nil,
-            bundledSubdirectory: nil
-        ),
-        AIModelDefinition(
-            id: "qwen-2.5-3b",
-            displayName: "Qwen 2.5 3B Instruct",
-            fileName: "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            id: "qwen-3-4b",
+            displayName: "Qwen3 4B Instruct",
+            fileName: "qwen3-4b-q4_k_m.gguf",
             tier: .advanced,
-            summary: "Optional higher-quality local generation model.",
+            summary: "Default high-quality local generation model.",
             downloadURL: nil,
             bundledSubdirectory: "Models"
         )
@@ -107,8 +99,12 @@ final class AIModelLibrary {
 
     private init() {
         _ = ensureModelsDirectoryExists()
-        if defaults.string(forKey: preferredModelKey) == nil {
-            defaults.set("qwen-2.5-1.5b", forKey: preferredModelKey)
+        if let stored = defaults.string(forKey: preferredModelKey) {
+            if catalog.first(where: { $0.id == stored }) == nil {
+                defaults.set(Self.defaultPreferredModelID, forKey: preferredModelKey)
+            }
+        } else {
+            defaults.set(Self.defaultPreferredModelID, forKey: preferredModelKey)
         }
     }
 
@@ -121,7 +117,14 @@ final class AIModelLibrary {
     }
 
     var preferredModelID: String? {
-        defaults.string(forKey: preferredModelKey)
+        guard let stored = defaults.string(forKey: preferredModelKey) else {
+            return Self.defaultPreferredModelID
+        }
+        if catalog.first(where: { $0.id == stored }) == nil {
+            defaults.set(Self.defaultPreferredModelID, forKey: preferredModelKey)
+            return Self.defaultPreferredModelID
+        }
+        return stored
     }
 
     func refreshSnapshot() -> AIModelLibrarySnapshot {
@@ -143,7 +146,7 @@ final class AIModelLibrary {
             options: [.skipsHiddenFiles]
         )) ?? []
 
-        return files
+        return (files + bundledModelURLs())
             .filter { $0.pathExtension.lowercased() == "gguf" }
             .compactMap { url in
                 let size = fileSize(at: url)
@@ -158,7 +161,12 @@ final class AIModelLibrary {
                     sourceDefinitionID: definition?.id
                 )
             }
+            .unique(by: \.id)
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    func localModels() -> [LocalModel] {
+        installedModels().map { localModel(for: $0.fileURL, installed: $0) }
     }
 
     func storageUsageBytes() -> Int64 {
@@ -189,29 +197,14 @@ final class AIModelLibrary {
         }
 
         let installed = installedModels()
-        switch tier {
-        case .basic, .standard:
-            if let exact = installed.first(where: { $0.sourceDefinitionID == "qwen-2.5-1.5b" }) {
-                return exact.fileURL
-            }
-            return installed.first(where: { record in
-                record.displayName.localizedCaseInsensitiveContains("1.5b")
-                    || record.displayName.localizedCaseInsensitiveContains("1b")
-                    || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("1.5b")
-                    || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("1b")
-            })?.fileURL
-        case .advanced:
-            if let exact = installed.first(where: { $0.sourceDefinitionID == "qwen-2.5-3b" }) {
-                return exact.fileURL
-            }
-            if let fallback = installed.first(where: { record in
-                record.displayName.localizedCaseInsensitiveContains("3b")
-                    || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("3b")
-            }) {
-                return fallback.fileURL
-            }
-            return installed.first(where: { $0.sourceDefinitionID == "qwen-2.5-1.5b" })?.fileURL
+        if let exact = installed.first(where: { $0.sourceDefinitionID == "qwen-3-4b" }) {
+            return exact.fileURL
         }
+        return installed.first(where: { record in
+            record.displayName.localizedCaseInsensitiveContains("qwen3")
+                || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("qwen3")
+                || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("4b")
+        })?.fileURL
     }
 
     func activeModelDescription(for tier: AICapabilityTier) -> String {
@@ -318,13 +311,8 @@ final class AIModelLibrary {
     }
 
     func preferredCatalogModel(for tier: AICapabilityTier) -> AIModelDefinition? {
-        switch tier {
-        case .basic, .standard:
-            return catalog.first(where: { $0.id == "qwen-2.5-1.5b" })
-        case .advanced:
-            return catalog.first(where: { $0.id == "qwen-2.5-3b" })
-                ?? catalog.first(where: { $0.id == "qwen-2.5-1.5b" })
-        }
+        _ = tier
+        return catalog.first(where: { $0.id == "qwen-3-4b" })
     }
 
     private func ensureModelsDirectoryExists() -> Bool {
@@ -350,6 +338,43 @@ final class AIModelLibrary {
         })
     }
 
+    private func bundledModelURLs() -> [URL] {
+        guard let resourceURL = Bundle.main.resourceURL else { return [] }
+        let fileManager = FileManager.default
+        let searchDirectories = [
+            resourceURL.appendingPathComponent("Models", isDirectory: true),
+            resourceURL
+        ]
+        return searchDirectories.flatMap { directory in
+            (try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        }
+    }
+
+    private func localModel(for url: URL, installed: AIInstalledModel) -> LocalModel {
+        let lower = url.lastPathComponent.lowercased()
+        let quantization = lower.contains("q4") ? "Q4_K_M" : "Unknown"
+        let parameterCount: Int64
+        if lower.contains("4b") {
+            parameterCount = 4_000_000_000
+        } else {
+            parameterCount = 0
+        }
+        let contextLength = quantization == "Q4_K_M" ? 4_096 : 2_048
+        return LocalModel(
+            id: installed.id,
+            name: installed.displayName,
+            path: url.path,
+            size: installed.fileSizeBytes,
+            contextLength: contextLength,
+            parameterCount: parameterCount,
+            quantization: quantization
+        )
+    }
+
     private func destinationURL(for sourceURL: URL, definition: AIModelDefinition?) -> URL {
         if let definition {
             return definition.suggestedFileURL
@@ -369,6 +394,15 @@ final class AIModelLibrary {
             return 0
         }
         return size.int64Value
+    }
+}
+
+private extension Array {
+    func unique<Key: Hashable>(by keyPath: KeyPath<Element, Key>) -> [Element] {
+        var seen = Set<Key>()
+        return filter { element in
+            seen.insert(element[keyPath: keyPath]).inserted
+        }
     }
 }
 

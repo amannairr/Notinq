@@ -1041,7 +1041,7 @@ class TextViewBridge {
         }
 
         // Keep Whisper lightweight: cap to 4 threads to avoid saturating CPU while editing.
-        LlamaProvider.shared.unloadModel()
+        AIModelManager.shared.unloadLlama(reason: "starting whisper transcription")
         let whisperThreads = min(4, ProcessInfo.processInfo.activeProcessorCount)
         guard let whisperManager = WhisperManager(modelPath: resolvedModelPath, threads: whisperThreads) else {
             insertStatusMessage(

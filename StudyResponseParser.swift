@@ -77,6 +77,14 @@ enum StudyResponseParser {
                 normalizedAnswer = normalizeTrueFalseAnswer(rawAnswer)
             case .shortAnswer:
                 normalizedAnswer = rawAnswer
+            case .fillInTheBlank:
+                normalizedAnswer = rawAnswer
+            case .conceptualUnderstanding:
+                normalizedAnswer = rawAnswer
+            case .application:
+                normalizedAnswer = rawAnswer
+            case .comparison:
+                normalizedAnswer = rawAnswer
             @unknown default:
                 normalizedAnswer = rawAnswer
             }

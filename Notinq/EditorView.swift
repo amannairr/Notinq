@@ -32,32 +32,34 @@ struct EditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            EditorTopBar(
-                bridge: bridge,
-                styleState: $styleState,
-                onAskAI: {
-                    appState.selectedMode = .ai
-                },
-                onGenerateStudyMaterials: {
-                    onGenerateStudyMaterials()
-                },
-                onAnalyzeLecture: {
-                    onAnalyzeLecture()
-                },
-                onUpdateKnowledgeGraph: {
-                    triggerKnowledgeGraphUpdate()
-                },
-                isGeneratingStudyMaterials: false,
-                isKnowledgeGraphGenerating: selectedNoteID.flatMap { knowledgeGraphManager.generationStateByNoteID[$0]?.isGenerating } ?? false,
-                canGenerateStudyMaterials: selectedNoteID != nil,
-                canUpdateKnowledgeGraph: selectedNoteID != nil
-            )
-            .frame(height: 58)
-            .background(Color.bgEditor)
-            .zIndex(2)
+            if !appState.isLearningInsightsOpen {
+                EditorTopBar(
+                    bridge: bridge,
+                    styleState: $styleState,
+                    onAskAI: {
+                        appState.selectedMode = .ai
+                    },
+                    onGenerateStudyMaterials: {
+                        onGenerateStudyMaterials()
+                    },
+                    onAnalyzeLecture: {
+                        onAnalyzeLecture()
+                    },
+                    onUpdateKnowledgeGraph: {
+                        triggerKnowledgeGraphUpdate()
+                    },
+                    isGeneratingStudyMaterials: false,
+                    isKnowledgeGraphGenerating: selectedNoteID.flatMap { knowledgeGraphManager.generationStateByNoteID[$0]?.isGenerating } ?? false,
+                    canGenerateStudyMaterials: selectedNoteID != nil,
+                    canUpdateKnowledgeGraph: selectedNoteID != nil
+                )
+                .frame(height: 58)
+                .background(Color.bgEditor)
+                .zIndex(2)
 
-            Divider()
-                .opacity(0.08)
+                Divider()
+                    .opacity(0.08)
+            }
 
             ZStack(alignment: .topLeading) {
                 if let selectedNoteID {
@@ -65,21 +67,36 @@ struct EditorView: View {
                         documentID: selectedNoteID,
                         documentText: noteContentBinding.wrappedValue,
                         onDebouncedTextChange: { newText in
-                            appState.updateNoteContent(newText, for: selectedNoteID)
-                        },
+                            Task { @MainActor in
+                                appState.updateNoteContent(newText, for: selectedNoteID)
+                            }
+                        }, 
                         onSelectionChange: { text, range in
-                            selectedText = text
-                            selectedRange = range
+                            Task { @MainActor in
+                                guard text != selectedText || range != selectedRange else { return }
+                                selectedText = text
+                                selectedRange = range
+                            }
                         },
                         onReady: { newBridge in
-                            bridge = newBridge
+                            Task { @MainActor in
+                                bridge.textView = newBridge.textView
+                            }
                         },
                         onSummarize: { performSelectionAction(.summarize) },
                         onSimplify: { performSelectionAction(.simplify) },
                         onRewrite: { performSelectionAction(.rewrite) },
                         onExplain: { performSelectionAction(.explain) },
-                        onFlashcards: { appState.selectedMode = .study },
-                        onQuiz: { appState.selectedMode = .study },
+                        onFlashcards: {
+                            Task { @MainActor in
+                                appState.selectedMode = .study
+                            }
+                        },
+                        onQuiz: {
+                            Task { @MainActor in
+                                appState.selectedMode = .study
+                            }
+                        },
                         onAdd: { performSelectionAction(.ask) },
                         onCopy: { copySelectedText() },
                         onStyleChange: { styleState = $0 },
@@ -141,11 +158,9 @@ struct EditorView: View {
         guard activeSelectionAction == nil else { return }
 
         let noteContext = appState.noteContent(for: noteID)
-        let prompt = prompt(for: action, selectedText: selection.text, noteContext: noteContext)
-        let requestKind = requestKind(for: action, selectedText: selection.text)
         activeSelectionAction = action
 
-        AIService.shared.run(prompt: prompt, contextLength: noteContext.count, kind: requestKind) { response in
+        AIService.shared.directEdit(action: action, selectedText: selection.text, noteContext: noteContext) { response in
             DispatchQueue.main.async {
                 bridge.insertAIResult(action: action, response: response, selectionRange: selection.range)
                 activeSelectionAction = nil
@@ -155,16 +170,12 @@ struct EditorView: View {
 
     private func performAIBlockFollowUp(_ followUp: AIBlockFollowUp, block: AIBlockSelection) {
         guard let textView = bridge.textView else { return }
-        let prompt = """
-        \(followUp.title) the following generated passage while preserving the note's context:
-
-        \(block.content)
-        """
+        let noteContext = textView.string
         bridge.beginAIStreaming(title: followUp.title, selectionRange: block.contentRange)
-        AIService.shared.runStreaming(
-            prompt: prompt,
-            contextLength: textView.string.count,
-            kind: .followUp,
+        AIService.shared.streamFollowUp(
+            noteContext: noteContext,
+            followUpTitle: followUp.title,
+            blockContent: block.content,
             onToken: { token in
                 bridge.appendAIStreamingToken(token)
             },
@@ -177,56 +188,6 @@ struct EditorView: View {
     private func selectedSelection() -> (text: String, range: NSRange)? {
         guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return (selectedText, selectedRange)
-    }
-
-    private func prompt(for action: AIAction, selectedText: String, noteContext: String) -> String {
-        let instruction: String
-        switch action {
-        case .summarize:
-            instruction = "Return only a concise summary with 3 to 5 bullet points. Do not add a preamble or labels."
-        case .simplify:
-            instruction = "Rewrite the selected passage in plain, simple language. Keep the meaning, keep it shorter if possible, and return only the rewritten text."
-        case .rewrite:
-            instruction = "Rewrite the selected passage for clarity, grammar, and flow while preserving every fact. Return only the revised passage."
-        case .explain:
-            instruction = "Explain the selected passage in simple language. Use note context when helpful, but return only the explanation."
-        case .add:
-            instruction = "Continue the selected passage naturally with 1 to 3 sentences."
-        case .ask:
-            instruction = "Answer the user's question using the selected text and nearby note context. If the context is not enough, say that clearly."
-        }
-
-        return """
-        You are helping edit a student note.
-        Return only the requested content.
-        Do not include headings such as 'Answer:' or labels such as 'Generated'.
-
-        Note context:
-        \(noteContext)
-
-        Selected text:
-        \(selectedText)
-
-        Instruction:
-        \(instruction)
-        """
-    }
-
-    private func requestKind(for action: AIAction, selectedText: String) -> AIRequestKind {
-        switch action {
-        case .summarize:
-            return .summarize
-        case .simplify:
-            return .rewrite(sourceLength: selectedText.count)
-        case .rewrite:
-            return .rewrite(sourceLength: selectedText.count)
-        case .explain:
-            return .explain
-        case .add:
-            return .add(sourceLength: selectedText.count)
-        case .ask:
-            return .ask
-        }
     }
 
     private func triggerKnowledgeGraphUpdate() {

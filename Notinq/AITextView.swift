@@ -211,14 +211,13 @@ struct AITextView: NSViewRepresentable {
 
         // DO NOT CHANGE EVER
         func showSelectionToolbar(for textView: NSTextView) {
-            selectionToolbar?.removeFromSuperview()
-
             let range = textView.selectedRange()
             guard SelectionToolbarView.isVisible(for: range) else { return }
 
-            let selectionRect = textView.firstRect(forCharacterRange: range, actualRange: nil)
-            let rectInWindow = textView.window?.convertFromScreen(selectionRect) ?? .zero
-            let rectInTextView = textView.convert(rectInWindow, from: nil)
+            if let selectionToolbar {
+                positionSelectionToolbar(selectionToolbar, for: textView, range: range)
+                return
+            }
 
             let hosting = NSHostingView(
                 rootView: SelectionToolbarView(
@@ -234,25 +233,34 @@ struct AITextView: NSViewRepresentable {
             )
 
             hosting.layoutSubtreeIfNeeded()
-            let fittingSize = hosting.fittingSize
-            let toolbarWidth = max(160, fittingSize.width)
-            let toolbarHeight = max(40, fittingSize.height)
-            hosting.frame.size = NSSize(width: toolbarWidth, height: toolbarHeight)
-
-            let horizontalPadding: CGFloat = 8
-            var originX = rectInTextView.maxX - (toolbarWidth * 0.35)
-            originX = max(horizontalPadding, min(textView.bounds.width - toolbarWidth - horizontalPadding, originX))
-
-            var originY = rectInTextView.minY - toolbarHeight - 8
-            if originY < 8 {
-                originY = rectInTextView.maxY + 8
-            }
-
-            hosting.frame.origin = CGPoint(x: originX, y: originY)
             hosting.wantsLayer = true
             hosting.layer?.zPosition = .greatestFiniteMagnitude
             textView.addSubview(hosting, positioned: .above, relativeTo: nil)
             selectionToolbar = hosting
+            positionSelectionToolbar(hosting, for: textView, range: range)
+        }
+
+        private func positionSelectionToolbar(_ hosting: NSView, for textView: NSTextView, range: NSRange) {
+            let selectionRect = textView.firstRect(forCharacterRange: range, actualRange: nil)
+            let rectInWindow = textView.window?.convertFromScreen(selectionRect) ?? .zero
+            let rectInTextView = textView.convert(rectInWindow, from: nil)
+
+            let fittingSize = hosting.fittingSize
+            let toolbarWidth = max(180, fittingSize.width)
+            let toolbarHeight = max(38, fittingSize.height)
+            hosting.frame.size = NSSize(width: toolbarWidth, height: toolbarHeight)
+
+            let horizontalPadding: CGFloat = 8
+            let centeredX = rectInTextView.midX - (toolbarWidth / 2)
+            let originX = max(horizontalPadding, min(textView.bounds.width - toolbarWidth - horizontalPadding, centeredX))
+
+            let aboveY = rectInTextView.minY - toolbarHeight - 10
+            let belowY = rectInTextView.maxY + 10
+            let originY = aboveY >= 8 ? aboveY : belowY
+
+            hosting.frame.origin = CGPoint(x: originX, y: originY)
+            hosting.wantsLayer = true
+            hosting.layer?.zPosition = .greatestFiniteMagnitude
         }
 
         func showAIBlockActionsIfNeeded(for textView: NSTextView) {
@@ -269,25 +277,34 @@ struct AITextView: NSViewRepresentable {
             )
 
             hosting.layoutSubtreeIfNeeded()
-            let fittingSize = hosting.fittingSize
-            let actionWidth = max(260, fittingSize.width)
-            let actionHeight = max(30, fittingSize.height)
-            hosting.frame.size = NSSize(width: actionWidth, height: actionHeight)
-
-            let blockRect = textView.firstRect(forCharacterRange: block.fullRange, actualRange: nil)
-            let rectInWindow = textView.window?.convertFromScreen(blockRect) ?? .zero
-            let rectInTextView = textView.convert(rectInWindow, from: nil)
-
-            let horizontalPadding: CGFloat = 12
-            let maxX = max(horizontalPadding, textView.bounds.width - actionWidth - horizontalPadding)
-            let originX = min(max(horizontalPadding, rectInTextView.minX + 14), maxX)
-            let originY = max(8, rectInTextView.maxY + 5)
-
-            hosting.frame.origin = CGPoint(x: originX, y: originY)
             hosting.wantsLayer = true
             hosting.layer?.zPosition = .greatestFiniteMagnitude
             textView.addSubview(hosting, positioned: .above, relativeTo: nil)
             aiBlockActions = hosting
+            positionAIBlockActions(hosting, for: textView, block: block)
+        }
+
+        private func positionAIBlockActions(_ hosting: NSView, for textView: NSTextView, block: AIBlockSelection) {
+            let blockRect = textView.firstRect(forCharacterRange: block.fullRange, actualRange: nil)
+            let rectInWindow = textView.window?.convertFromScreen(blockRect) ?? .zero
+            let rectInTextView = textView.convert(rectInWindow, from: nil)
+
+            let fittingSize = hosting.fittingSize
+            let actionWidth = max(260, fittingSize.width)
+            let actionHeight = max(32, fittingSize.height)
+            hosting.frame.size = NSSize(width: actionWidth, height: actionHeight)
+
+            let horizontalPadding: CGFloat = 12
+            let centeredX = rectInTextView.minX + 12
+            let originX = max(horizontalPadding, min(textView.bounds.width - actionWidth - horizontalPadding, centeredX))
+
+            let aboveY = rectInTextView.minY - actionHeight - 8
+            let belowY = rectInTextView.maxY + 8
+            let originY = aboveY >= 8 ? aboveY : belowY
+
+            hosting.frame.origin = CGPoint(x: originX, y: originY)
+            hosting.wantsLayer = true
+            hosting.layer?.zPosition = .greatestFiniteMagnitude
         }
         
         func textDidBeginEditing(_ notification: Notification) {
@@ -356,11 +373,11 @@ struct AIBlockInlineActionsView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .background(.thinMaterial)
-        .background(Color.bgEditor.opacity(0.7))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(Color.bgEditor.opacity(0.74))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.borderSubtle.opacity(0.7), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.borderSubtle.opacity(0.72), lineWidth: 0.6)
         )
         .opacity(visible ? 1 : 0)
         .onAppear {
@@ -377,10 +394,10 @@ struct AIBlockInlineActionsView: View {
         .font(.system(size: 11, weight: .medium))
         .foregroundColor(Color.textSecondary)
         .buttonStyle(.plain)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .background(Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 
@@ -422,8 +439,19 @@ final class AIBlockTextView: NSTextView {
 
             let insertionDate = storage.attribute(.aiBlockInsertedAt, at: blockRange.location, effectiveRange: nil) as? Date
             let emphasis = Self.insertionHighlightAlpha(for: insertionDate)
-            NSColor(calibratedRed: 0.93, green: 0.91, blue: 0.86, alpha: emphasis).setFill()
-            NSBezierPath(roundedRect: blockRect, xRadius: 8, yRadius: 8).fill()
+            let fillColor = NSColor(calibratedRed: 0.92, green: 0.96, blue: 0.99, alpha: emphasis)
+            let borderColor = NSColor(calibratedRed: 0.62, green: 0.76, blue: 0.86, alpha: min(0.42, emphasis + 0.08))
+            fillColor.setFill()
+            let backgroundPath = NSBezierPath(roundedRect: blockRect, xRadius: 11, yRadius: 11)
+            backgroundPath.fill()
+
+            borderColor.setStroke()
+            backgroundPath.lineWidth = 0.8
+            backgroundPath.stroke()
+
+            let accentBar = NSRect(x: blockRect.minX, y: blockRect.minY, width: 4, height: blockRect.height)
+            NSColor(calibratedRed: 0.38, green: 0.62, blue: 0.78, alpha: min(0.32, emphasis + 0.05)).setFill()
+            NSBezierPath(roundedRect: accentBar, xRadius: 11, yRadius: 11).fill()
         }
     }
 

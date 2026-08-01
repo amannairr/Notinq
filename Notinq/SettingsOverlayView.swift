@@ -4,6 +4,10 @@ struct SettingsOverlayView: View {
     @EnvironmentObject private var appState: AppState
     @State private var authErrorMessage: String?
     @State private var modelPathSummary: String = AIModelManager.shared.currentModelPathDescription()
+    #if DEBUG
+    @State private var isShowingAIEvaluation = false
+    @State private var isShowingLocalAIPlayground = false
+    #endif
 
     var body: some View {
         ZStack {
@@ -19,6 +23,7 @@ struct SettingsOverlayView: View {
                 privacySection
                 voiceSection
                 accountSection
+                debugSection
             }
             .padding(24)
             .frame(width: 460)
@@ -34,6 +39,14 @@ struct SettingsOverlayView: View {
         .onReceive(NotificationCenter.default.publisher(for: .notinqLocalModelDidChange)) { _ in
             modelPathSummary = AIModelManager.shared.currentModelPathDescription()
         }
+        #if DEBUG
+        .sheet(isPresented: $isShowingAIEvaluation) {
+            AIEvaluationView()
+        }
+        .sheet(isPresented: $isShowingLocalAIPlayground) {
+            LocalAIPlaygroundView()
+        }
+        #endif
     }
 
     private var header: some View {
@@ -160,6 +173,26 @@ struct SettingsOverlayView: View {
             }
         }
     }
+
+    #if DEBUG
+    private var debugSection: some View {
+        section("Developer") {
+            Button("Open AI Evaluation") {
+                isShowingAIEvaluation = true
+            }
+            .buttonStyle(.bordered)
+
+            Button("Open Local AI Playground") {
+                isShowingLocalAIPlayground = true
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+    #else
+    private var debugSection: some View {
+        EmptyView()
+    }
+    #endif
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {

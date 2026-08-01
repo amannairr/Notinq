@@ -90,16 +90,31 @@ enum AIRequestKind {
 
 final class AIService {
     static let shared = AIService()
-    private let router = AIRouter()
+
+    private let inferenceEngine = InferenceEngine.shared
 
     func run(prompt: String, contextLength: Int, completion: @escaping (String) -> Void) {
-        let provider = router.route(contextLength: contextLength)
-        provider.run(prompt: prompt, completion: completion)
+        run(prompt: prompt, contextLength: contextLength, kind: .ask, completion: completion)
     }
 
     func run(prompt: String, contextLength: Int, kind: AIRequestKind, completion: @escaping (String) -> Void) {
-        let provider = router.route(contextLength: contextLength)
-        provider.run(prompt: prompt, maxTokens: kind.maxTokens, completion: completion)
+        let request = AIGenerationRequest(
+            prompt: prompt,
+            systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+            maxTokens: kind.maxTokens,
+            temperature: 0.5,
+            topP: 0.92,
+            responseFormat: .text,
+            contextLimit: contextLength,
+            metadata: ["requestKind": "\(kind)"]
+        )
+
+        Task {
+            let response = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            await MainActor.run {
+                completion(response)
+            }
+        }
     }
 
     func runStreaming(
@@ -108,13 +123,7 @@ final class AIService {
         onToken: @escaping (String) -> Void,
         completion: @escaping () -> Void
     ) {
-        runStreaming(
-            prompt: prompt,
-            contextLength: contextLength,
-            kind: .followUp,
-            onToken: onToken,
-            completion: completion
-        )
+        runStreaming(prompt: prompt, contextLength: contextLength, kind: .followUp, onToken: onToken, completion: completion)
     }
 
     func runStreaming(
@@ -124,11 +133,149 @@ final class AIService {
         onToken: @escaping (String) -> Void,
         completion: @escaping () -> Void
     ) {
-        let provider = router.route(contextLength: contextLength)
-        provider.runStreaming(prompt: prompt, maxTokens: kind.maxTokens, onToken: onToken, completion: completion)
+        let request = AIGenerationRequest(
+            prompt: prompt,
+            systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+            maxTokens: kind.maxTokens,
+            temperature: 0.45,
+            topP: 0.92,
+            responseFormat: .text,
+            contextLimit: contextLength,
+            metadata: ["requestKind": "\(kind)"]
+        )
+
+        Task {
+            _ = try? await inferenceEngine.stream(request, onToken: onToken)
+            await MainActor.run {
+                completion()
+            }
+        }
     }
 
     func cancelGeneration() {
-        AIModelManager.shared.currentLlamaContext()?.cancelGeneration()
+        inferenceEngine.cancel()
+    }
+
+    func directEdit(
+        action: AIAction,
+        selectedText: String,
+        noteContext: String,
+        completion: @escaping (String) -> Void
+    ) {
+        let promptContext = AIPromptContext(
+            noteTitle: "",
+            noteText: noteContext,
+            knowledgeJSON: nil,
+            selectedText: selectedText,
+            userRequest: action.promptInstruction()
+        )
+        let request = PromptRegistry.shared.renderPrompt(for: .directEditing, context: promptContext)
+
+        Task {
+            let response = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            await MainActor.run {
+                completion(response)
+            }
+        }
+    }
+
+    func streamFollowUp(
+        noteContext: String,
+        followUpTitle: String,
+        blockContent: String,
+        onToken: @escaping (String) -> Void,
+        completion: @escaping () -> Void
+    ) {
+        let promptContext = AIPromptContext(
+            noteTitle: "",
+            noteText: noteContext,
+            knowledgeJSON: nil,
+            selectedText: blockContent,
+            userRequest: "\(followUpTitle) the following generated passage while preserving the note's context."
+        )
+        let request = PromptRegistry.shared.renderPrompt(for: .directEditing, context: promptContext)
+
+        Task {
+            _ = try? await inferenceEngine.stream(request, onToken: onToken)
+            await MainActor.run {
+                completion()
+            }
+        }
+    }
+
+    func chat(noteTitle: String, noteText: String, userRequest: String, completion: @escaping (String) -> Void) {
+        let promptContext = AIPromptContext(
+            noteTitle: noteTitle,
+            noteText: noteText,
+            knowledgeJSON: nil,
+            selectedText: nil,
+            userRequest: userRequest
+        )
+        let request = PromptRegistry.shared.renderPrompt(for: .assistantChat, context: promptContext)
+
+        Task {
+            let response = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            await MainActor.run {
+                completion(response)
+            }
+        }
+    }
+
+    func extractStructuredKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StructuredKnowledge {
+        await LearningEngine.shared.extractStructuredKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+    }
+
+    func extractKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StudyKnowledgeSnapshot {
+        await LearningEngine.shared.extractKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+    }
+
+    func inspectKnowledgeExtraction(noteTitle: String, noteText: String, notebookText: String = "") async -> KnowledgeExtractionDebugReport {
+        await KnowledgeExtractionEngine.shared.inspectExtraction(
+            noteTitle: noteTitle,
+            noteText: noteText,
+            notebookText: notebookText
+        )
+    }
+
+    func generateStudyData(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String = "",
+        existingStudyData: NoteStudyData
+    ) async -> NoteStudyData {
+        let knowledge = await extractStructuredKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        return LearningEngine.shared.generateStudyData(from: knowledge, existingStudyData: existingStudyData)
+    }
+
+    func generateStudyData(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String = ""
+    ) async -> NoteStudyData {
+        await generateStudyData(
+            noteTitle: noteTitle,
+            noteText: noteText,
+            notebookText: notebookText,
+            existingStudyData: NoteStudyData()
+        )
+    }
+}
+
+private extension AIAction {
+    func promptInstruction() -> String {
+        switch self {
+        case .summarize:
+            return "Summarize the selected text into a study-ready overview."
+        case .simplify:
+            return "Rewrite the selected text in simpler language without losing meaning."
+        case .rewrite:
+            return "Rewrite the selected text for clarity and flow while preserving every fact."
+        case .explain:
+            return "Explain the selected text in plain language."
+        case .add:
+            return "Continue the selected text naturally with a few helpful sentences."
+        case .ask:
+            return "Answer the user's question using the note context."
+        }
     }
 }

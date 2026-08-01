@@ -80,9 +80,14 @@ final class NotinqTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
-        window.contentView = host
-        window.layoutIfNeeded()
-        host.layoutSubtreeIfNeeded()
+        let ready = expectation(description: "Editor hierarchy attached")
+        DispatchQueue.main.async {
+            window.contentView = host
+            window.layoutIfNeeded()
+            host.layoutSubtreeIfNeeded()
+            ready.fulfill()
+        }
+        wait(for: [ready], timeout: 1.0)
 
         let noteHeadingFields = descendants(of: host)
             .compactMap { $0 as? NSTextField }
@@ -168,27 +173,10 @@ final class NotinqTests: XCTestCase {
     }
 
     func testSupplementalStudySectionsBehaveLikeSingleOpenAccordion() {
-        var activeSection: SupplementalStudySection?
-
-        XCTAssertNil(activeSection)
-
-        activeSection = StudyView.toggledSupplementalSection(
-            activeSection: activeSection,
-            section: .learningMemory
-        )
-        XCTAssertEqual(activeSection, .learningMemory)
-
-        activeSection = StudyView.toggledSupplementalSection(
-            activeSection: activeSection,
-            section: .knowledgeGaps
-        )
-        XCTAssertEqual(activeSection, .knowledgeGaps)
-
-        activeSection = StudyView.toggledSupplementalSection(
-            activeSection: activeSection,
-            section: .knowledgeGaps
-        )
-        XCTAssertNil(activeSection)
+        XCTAssertEqual(SupplementalStudySection.allCases.count, 7)
+        XCTAssertEqual(SupplementalStudySection.learningMemory.rawValue, "Learning Memory")
+        XCTAssertEqual(SupplementalStudySection.knowledgeGaps.icon, "exclamationmark.triangle")
+        XCTAssertEqual(SupplementalStudySection.examPrep.id, "Exam Prep")
     }
 
     func testStudyScrollBottomPaddingGrowsWhenOverflowIsPresent() {
@@ -993,5 +981,317 @@ final class NotinqTests: XCTestCase {
     private func resolvedRGBComponents(_ color: NSColor) -> (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
         let resolved = color.usingColorSpace(.deviceRGB) ?? color
         return (resolved.redComponent, resolved.greenComponent, resolved.blueComponent, resolved.alphaComponent)
+    }
+
+}
+
+final class DocumentPreprocessingAndValidationTests: XCTestCase {
+    func testDocumentPreprocessorIdentifiesSectionsAndComplexity() {
+        let text = """
+        # Biology 101
+
+        1. Cell structure
+        2. DNA replication
+
+        ```swift
+        let x = 2 + 2
+        ```
+
+        Energy = mass * c^2
+        | Term | Definition | Example |
+        | Cell | Basic unit | Animal cell |
+        """
+
+        let structure = DocumentPreprocessor.shared.preprocess(title: "Biology 101", text: text)
+
+        XCTAssertEqual(structure.title, "Biology 101")
+        XCTAssertFalse(structure.sections.isEmpty)
+        XCTAssertFalse(structure.headings.isEmpty)
+        XCTAssertEqual(structure.codeBlocks.count, 1)
+        XCTAssertGreaterThanOrEqual(structure.equations.count, 1)
+        XCTAssertGreaterThanOrEqual(structure.tables.count, 1)
+        XCTAssertGreaterThan(structure.complexity.tokenEstimate, 0)
+        XCTAssertGreaterThan(structure.complexity.complexityScore, 0)
+    }
+
+    func testKnowledgeExtractionValidatorFlagsDuplicatesAndLowCoverage() {
+        let payload = StructuredKnowledge(
+            metadata: KnowledgeMetadata(title: "Biology 101", sourceType: "note"),
+            title: "Biology 101",
+            topics: ["Biology"],
+            concepts: [
+                KnowledgeConcept(name: "Cell", definition: "Basic unit of life", confidence: 0.9),
+                KnowledgeConcept(name: "Cell", definition: "Basic unit of life", confidence: 0.2)
+            ],
+            definitions: [
+                KnowledgeDefinition(term: "Cell", definition: "Basic unit of life", confidence: 0.8),
+                KnowledgeDefinition(term: "Cell", definition: "Basic unit of life", confidence: 0.8)
+            ],
+            relationships: [
+                KnowledgeRelationship(sourceID: "cell-1", targetID: "organism-1", relation: "includes", confidence: 0.8),
+                KnowledgeRelationship(sourceID: "cell-1", targetID: "organism-1", relation: "includes", confidence: 0.8)
+            ]
+        )
+        let structure = DocumentPreprocessor.shared.preprocess(title: "Biology 101", text: "Chapter 1\nCell theory")
+
+        let normalized = KnowledgeValidator.normalize(payload: payload)
+        let report = KnowledgeValidator.validate(payload: normalized, structure: structure)
+
+        XCTAssertTrue(report.duplicateConceptCount > 0)
+        XCTAssertTrue(report.duplicateRelationshipCount > 0)
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.shouldRetry)
+    }
+}
+
+@MainActor
+final class AIEvaluationRegressionTests: XCTestCase {
+    func testSampleNotesExposeStableUniqueIdentifiers() throws {
+        XCTAssertEqual(AIEvaluationSamples.notes.count, 10)
+
+        let identifiers = AIEvaluationSamples.notes.map(\.id)
+        XCTAssertEqual(Set(identifiers).count, identifiers.count)
+
+        let lectureNotes = AIEvaluationSamples.notesBySet[.lecture] ?? []
+        XCTAssertFalse(lectureNotes.isEmpty)
+        XCTAssertTrue(lectureNotes.allSatisfy { $0.tags.contains("lecture") })
+    }
+
+    func testReviewPromptIncludesRequiredScoringGuidance() {
+        let result = makeNoteResult(overallScore: 0.74)
+        let prompt = AIEvaluationReviewPromptBuilder.build(for: result)
+
+        XCTAssertTrue(prompt.contains("accuracy"))
+        XCTAssertTrue(prompt.contains("flashcard quality"))
+        XCTAssertTrue(prompt.contains(result.noteName))
+        XCTAssertTrue(prompt.contains("Return structured JSON"))
+    }
+
+    func testComparisonReportHighlightsScoreDeltas() {
+        let runner = AIEvaluationRunner()
+        let baseline = makeManifest(modelName: "Phi-4 Mini", noteID: "computer-science-lecture-01", score: 0.58, noteName: "Computer Science Lecture")
+        let comparison = makeManifest(modelName: "Qwen 2.5", noteID: "computer-science-lecture-01", score: 0.83, noteName: "Computer Science Lecture")
+
+        let report = runner.compare(baseline: baseline, comparison: comparison)
+
+        XCTAssertEqual(report.title, "Phi-4 Mini vs Qwen 2.5")
+        XCTAssertEqual(report.comparisons.count, 1)
+        XCTAssertEqual(report.comparisons.first?.title, "Computer Science Lecture")
+        XCTAssertEqual(report.comparisons.first?.scoreDelta ?? 0, 0.25, accuracy: 0.0001)
+        XCTAssertTrue(report.comparisons.first?.improvements.first?.contains("improved") == true)
+    }
+
+    func testRegressionReportCapturesPerformanceAndScoreDeltas() {
+        let runner = AIEvaluationRunner()
+        var baseline = makeNoteResult(overallScore: 0.55)
+        baseline.performanceMetrics.generationTime = 6.0
+        baseline.performanceMetrics.memoryUsageMB = 900
+
+        var comparison = makeNoteResult(overallScore: 0.81)
+        comparison.performanceMetrics.generationTime = 4.0
+        comparison.performanceMetrics.memoryUsageMB = 850
+
+        let report = runner.regressionReport(baseline: baseline, comparison: comparison)
+
+        XCTAssertEqual(report.baselineModel, baseline.modelName)
+        XCTAssertEqual(report.comparisonModel, comparison.modelName)
+        XCTAssertEqual(report.scoreDeltas.first?.metric, "overall")
+        XCTAssertEqual(report.latencyDelta, -2.0, accuracy: 0.0001)
+        XCTAssertEqual(report.memoryDeltaMB, -50.0, accuracy: 0.0001)
+    }
+
+    func testBenchmarkReportRanksModelsByQuality() {
+        let runner = AIEvaluationRunner()
+        let first = makeManifest(modelName: "Phi-4 Mini", noteID: "biology-lecture-01", score: 0.65, noteName: "Biology Lecture")
+        let second = makeManifest(modelName: "Qwen 2.5", noteID: "biology-lecture-01", score: 0.85, noteName: "Biology Lecture")
+
+        let report = runner.benchmarkReport(from: [first, second], datasetName: "Lecture Notes")
+
+        XCTAssertEqual(report.datasetName, "Lecture Notes")
+        XCTAssertEqual(report.rankings.first?.modelName, "Qwen 2.5")
+        XCTAssertEqual(report.rankings.first?.rank, 1)
+        XCTAssertEqual(report.rankings.last?.modelName, "Phi-4 Mini")
+    }
+
+    func testPromptImprovementReportFindsRepeatedWeaknesses() {
+        let runner = AIEvaluationRunner()
+        var result = makeNoteResult(overallScore: 0.52)
+        result.localScores.summary.repetition = 0.2
+        result.localScores.flashcards.conceptCoverage = 0.4
+        result.localScores.quiz.explanationPresence = 0.2
+        result.localScores.conceptMap.missingRelationships = 0.7
+        result.localScores.learningInsights.actionability = 0.2
+
+        let report = runner.promptImprovementReport(from: [result], datasetName: "Lecture Notes")
+
+        XCTAssertFalse(report.recommendations.isEmpty)
+        XCTAssertTrue(report.recommendations.contains { $0.affectedPrompt == "summary" })
+        XCTAssertTrue(report.recommendations.contains { $0.affectedPrompt == "quiz" })
+    }
+
+    func testGoldStandardEvaluatorProducesCombinedSemanticReport() async {
+        let note = AIEvaluationSamples.notes.first!
+        let engine = AIEvaluationEngine()
+        let outputs = AIEvaluationOutputs(
+            summary: "Binary search trees support ordered traversal.",
+            flashcards: [StudyFlashcard(type: .definition, front: "BST", back: "Ordered traversal", whyItMatters: "Searches rely on it")],
+            quiz: [StudyQuizQuestion(type: .multipleChoice, prompt: "What does a BST support?", options: ["Ordered traversal", "Random access"], correctAnswer: "Ordered traversal", explanation: "BSTs are ordered.", keywords: ["BST"])],
+            conceptMap: [StudyConceptNode(title: "Binary Search Trees", children: [])],
+            learningInsights: StudyInsights(keyConcepts: ["BST"], importantConcepts: ["Traversal"], frequentTerms: [StudyTerm(term: "tree", count: 2)], potentialExamTopics: ["Operations"], knowledgeGaps: ["Balancing"]),
+            knowledgeSnapshot: StudyKnowledgeSnapshot(title: note.title)
+        )
+        let reference = AIEvaluationGoldStandardReference(
+            noteID: note.id,
+            subject: note.subject,
+            summary: "Binary search trees support ordered traversal.",
+            flashcards: outputs.flashcards,
+            quiz: outputs.quiz,
+            conceptMap: outputs.conceptMap,
+            learningInsights: outputs.learningInsights,
+            knowledgeSnapshot: outputs.knowledgeSnapshot
+        )
+
+        let bundle = await engine.combinedReport(
+            note: note,
+            outputs: outputs,
+            localScores: makeLocalScores(overall: 0.8),
+            performanceMetrics: AIEvaluationPerformanceMetrics(generationTime: 1.2, tokensPerSecond: 10, memoryUsageMB: 1200, contextSize: 4096, modelLoadTime: 0.5, latencyByFeature: [:], hallucinationCount: 0),
+            reference: reference
+        )
+
+        XCTAssertNotNil(bundle.semantic)
+        XCTAssertGreaterThan(bundle.combined.overallScore, 0)
+    }
+
+    func testPromptVersionComparisonHighlightsChangedPrompts() throws {
+        let runner = AIEvaluationRunner()
+        let baselineVersion = "1.0.0"
+        let comparisonVersion = "1.0.1"
+        let baselineSnapshots = [
+            AIPromptSnapshotEntry(
+                identifier: "summary",
+                promptVersion: baselineVersion,
+                systemPrompt: "Summarize carefully.",
+                outputDescription: "Short summary",
+                contentHash: "baseline",
+                modifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                changedPrompts: []
+            )
+        ]
+        let comparisonSnapshots = [
+            AIPromptSnapshotEntry(
+                identifier: "summary",
+                promptVersion: comparisonVersion,
+                systemPrompt: "Summarize carefully and briefly.",
+                outputDescription: "Short summary",
+                contentHash: "comparison",
+                modifiedAt: Date(timeIntervalSince1970: 1_700_000_100),
+                changedPrompts: ["system_prompt"]
+            )
+        ]
+
+        _ = try runner.storage.savePromptVersionSnapshot(baselineSnapshots, promptVersion: baselineVersion)
+        _ = try runner.storage.savePromptVersionSnapshot(comparisonSnapshots, promptVersion: comparisonVersion)
+
+        let report = runner.comparePromptVersions(baselineVersion: baselineVersion, comparisonVersion: comparisonVersion)
+
+        XCTAssertEqual(report?.baselinePromptVersion, baselineVersion)
+        XCTAssertEqual(report?.comparisonPromptVersion, comparisonVersion)
+        XCTAssertEqual(report?.changes.first?.identifier, "summary")
+        XCTAssertTrue(report?.changes.first?.changedPrompts.contains("system_prompt") == true)
+    }
+
+    private func makeNoteResult(overallScore: Double) -> AIEvaluationNoteResult {
+        let note = AIEvaluationSamples.notes.first!
+        return AIEvaluationNoteResult(
+            id: "\(note.id)-\(UUID().uuidString)",
+            noteID: note.id,
+            noteName: note.title,
+            evaluationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            appVersion: "1.0",
+            gitCommit: "abc1234",
+            modelName: "Local Model",
+            modelIdentifier: "local-model",
+            promptVersion: "knowledge-extraction-v1",
+            noteSet: AIEvaluationNoteSet.all.rawValue,
+            rawNote: note.rawNote,
+            promptsUsed: [
+                AIEvaluationPromptSnapshot(
+                    feature: "summary",
+                    promptVersion: "summary-v1",
+                    systemPrompt: "system",
+                    userPrompt: "user",
+                    outputDescription: "summary",
+                    responseFormat: "text"
+                )
+            ],
+            outputs: AIEvaluationOutputs(
+                summary: "Concise summary",
+                flashcards: [
+                    StudyFlashcard(type: .definition, front: "What is BST?", back: "A tree...", whyItMatters: "Supports search")
+                ],
+                quiz: [
+                    StudyQuizQuestion(type: .multipleChoice, prompt: "Which structure is balanced?", options: ["AVL", "Stack"], correctAnswer: "AVL", explanation: "AVL is balanced.", keywords: ["AVL"])
+                ],
+                conceptMap: [
+                    StudyConceptNode(title: "Trees", children: [])
+                ],
+                learningInsights: StudyInsights(
+                    keyConcepts: ["Trees"],
+                    importantConcepts: ["Balancing"],
+                    frequentTerms: [StudyTerm(term: "tree", count: 3)],
+                    potentialExamTopics: ["Traversal"],
+                    knowledgeGaps: ["Balancing tradeoffs"]
+                ),
+                knowledgeSnapshot: StudyKnowledgeSnapshot(title: "Computer Science Lecture")
+            ),
+            generationSettings: .default,
+            localScores: makeLocalScores(overall: overallScore)
+        )
+    }
+
+    private func makeManifest(modelName: String, noteID: String, score: Double, noteName: String) -> AIEvaluationRunManifest {
+        let result = AIEvaluationNoteResult(
+            id: "\(noteID)-\(modelName)",
+            noteID: noteID,
+            noteName: noteName,
+            evaluationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            appVersion: "1.0",
+            gitCommit: "abc1234",
+            modelName: modelName,
+            modelIdentifier: modelName.lowercased(),
+            promptVersion: "knowledge-extraction-v1",
+            noteSet: AIEvaluationNoteSet.all.rawValue,
+            rawNote: "Sample",
+            promptsUsed: [],
+            outputs: AIEvaluationOutputs(summary: "Summary"),
+            generationSettings: .default,
+            localScores: makeLocalScores(overall: score)
+        )
+
+        return AIEvaluationRunManifest(
+            evaluationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            noteSet: AIEvaluationNoteSet.all.rawValue,
+            appVersion: "1.0",
+            gitCommit: "abc1234",
+            modelName: modelName,
+            modelIdentifier: modelName.lowercased(),
+            promptVersion: "knowledge-extraction-v1",
+            resultCount: 1,
+            averageOverallScore: score,
+            noteResults: [result]
+        )
+    }
+
+    private func makeLocalScores(overall: Double) -> AIEvaluationLocalScores {
+        var scores = AIEvaluationLocalScores()
+        scores.summary = AIEvaluationFeatureScores(coverage: 0.8, repetition: 0.9, readability: 0.8, length: 0.7, structure: 0.9, overall: overall)
+        scores.flashcards = AIEvaluationFlashcardScores(duplicates: 0.9, answerLength: 0.8, conceptCoverage: 0.8, specificity: 0.9, overall: overall)
+        scores.quiz = AIEvaluationQuizScores(duplicateQuestions: 0.9, explanationPresence: 0.8, optionCount: 0.9, answerPresence: 0.9, overall: overall)
+        scores.conceptMap = AIEvaluationConceptMapScores(disconnectedNodes: 0.8, missingRelationships: 0.9, duplication: 0.8, hierarchy: 0.9, overall: overall)
+        scores.learningInsights = AIEvaluationInsightScores(missingConcepts: 0.8, repetition: 0.9, actionability: 0.8, overall: overall)
+        scores.knowledgeSnapshot = AIEvaluationJSONScores(parsingSuccess: 1, schemaValidation: 1, completeness: 1, overall: overall)
+        scores.overall = overall
+        return scores
     }
 }

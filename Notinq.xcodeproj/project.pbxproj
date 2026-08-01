@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		071AAE76301650510076E7B7 /* qwen3-4b-q4_k_m.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 071AAE75301650510076E7B7 /* qwen3-4b-q4_k_m.gguf */; };
+		071AAE80301E0DF40076E7B7 /* PromptTextAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */; };
+		071AAE84301E10B20076E7B7 /* SemanticChunker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE83301E10B20076E7B7 /* SemanticChunker.swift */; };
+		071AAE86301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */; };
 		07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */; };
 		07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462872FA64859009B2513 /* WhisperBridge.mm */; };
 		07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B462892FA648A8009B2513 /* AudioStreamManager.swift */; };
@@ -20,7 +24,6 @@
 		07B462AC2FA77B6E009B2513 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AB2FA77B6E009B2513 /* Metal.framework */; };
 		07B462AE2FA77B79009B2513 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AD2FA77B79009B2513 /* MetalKit.framework */; };
 		07B462B02FA77B87009B2513 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AF2FA77B87009B2513 /* Accelerate.framework */; };
-		07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */ = {isa = PBXBuildFile; fileRef = 07B462B12FA77BDB009B2513 /* ggml-base.en.bin */; };
 		07B462BB2FA7A2F6009B2513 /* LlamaBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */; };
 		07F7A0012FB8000100AA1001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07F7A0002FB8000100AA1001 /* XCTest.framework */; };
 		8A1D01012FB1000200AA1001 /* libllama.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A1D01022FB1000200AA1001 /* libllama.a */; };
@@ -44,6 +47,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		071AAE75301650510076E7B7 /* qwen3-4b-q4_k_m.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "qwen3-4b-q4_k_m.gguf"; sourceTree = "<group>"; };
+		071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTextAssets.swift; sourceTree = "<group>"; };
+		071AAE83301E10B20076E7B7 /* SemanticChunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticChunker.swift; sourceTree = "<group>"; };
+		071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeExtractionDebuggerView.swift; sourceTree = "<group>"; };
 		07279D8B2F8AA40300A1D363 /* Notinq.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notinq.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279D9A2F8AA40400A1D363 /* NotinqTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -61,7 +68,6 @@
 		07B462AB2FA77B6E009B2513 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		07B462AD2FA77B79009B2513 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		07B462AF2FA77B87009B2513 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
-		07B462B12FA77BDB009B2513 /* ggml-base.en.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = "ggml-base.en.bin"; path = "../../../models/ggml-base.en.bin"; sourceTree = "<group>"; };
 		07B462B92FA7A2F6009B2513 /* LlamaBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LlamaBridge.h; sourceTree = "<group>"; };
 		07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LlamaBridge.mm; sourceTree = "<group>"; };
 		07F7A0002FB8000100AA1001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
@@ -160,6 +166,9 @@
 				07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */,
 				07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */,
 				070667C7300C1BBF002CE5C1 /* Recovered References */,
+				071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */,
+				071AAE83301E10B20076E7B7 /* SemanticChunker.swift */,
+				071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -176,7 +185,7 @@
 		07B462932FA760E6009B2513 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				07B462B12FA77BDB009B2513 /* ggml-base.en.bin */,
+				071AAE75301650510076E7B7 /* qwen3-4b-q4_k_m.gguf */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -316,7 +325,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */,
+				071AAE76301650510076E7B7 /* qwen3-4b-q4_k_m.gguf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -346,8 +355,11 @@
 				07B4628C2FA648A8009B2513 /* TranscriptionEngine.swift in Sources */,
 				07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */,
 				07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */,
+				071AAE86301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift in Sources */,
 				07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */,
 				07B462902FA648A8009B2513 /* WhisperManager.swift in Sources */,
+				071AAE80301E0DF40076E7B7 /* PromptTextAssets.swift in Sources */,
+				071AAE84301E10B20076E7B7 /* SemanticChunker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
