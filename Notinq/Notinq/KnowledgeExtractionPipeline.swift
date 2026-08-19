@@ -50,7 +50,7 @@ struct KnowledgeExtractionRun: Sendable {
 
 final class KnowledgeExtractionEngine {
     static let shared = KnowledgeExtractionEngine()
-    private static let extractionRevision = "knowledge-extraction-v3"
+    private static let extractionRevision = "knowledge-extraction-v4"
 
     private init() {}
 
@@ -58,8 +58,20 @@ final class KnowledgeExtractionEngine {
         await extractRun(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText).knowledge
     }
 
+    func extractKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StructuredKnowledge {
+        await extractRun(from: structure, notebookText: notebookText).knowledge
+    }
+
     func extractRun(noteTitle: String, noteText: String, notebookText: String = "") async -> KnowledgeExtractionRun {
         await chunkedExtractRun(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+    }
+
+    func extractRun(from structure: DocumentStructure, notebookText: String = "") async -> KnowledgeExtractionRun {
+        await chunkedExtractRun(from: structure, notebookText: notebookText)
+    }
+
+    func inspectExtraction(from structure: DocumentStructure, notebookText: String = "") async -> KnowledgeExtractionDebugReport {
+        await extractRun(from: structure, notebookText: notebookText).debugReport
     }
 
     private func chunkedExtractRun(noteTitle: String, noteText: String, notebookText: String) async -> KnowledgeExtractionRun {
@@ -147,6 +159,50 @@ final class KnowledgeExtractionEngine {
             totalRetries += chunkResult.debug.retryCount
         }
 
+        let globalRelationships = buildRelationships(concepts: knowledge.concepts, sentences: splitSentences(normalizedNoteText))
+        if !globalRelationships.isEmpty {
+            knowledge.relationships = mergeRelationships(knowledge.relationships + globalRelationships)
+        }
+        if knowledge.relationships.isEmpty && knowledge.concepts.count >= 2 {
+            let sentences = splitSentences(normalizedNoteText)
+            var fallbackRelationships: [KnowledgeRelationship] = []
+            for (index, sentence) in sentences.enumerated() {
+                let lower = sentence.lowercased()
+                let matchedConcepts = knowledge.concepts.filter { concept in
+                    ([concept.name] + concept.aliases).contains(where: { lower.contains($0.lowercased()) })
+                }
+                guard matchedConcepts.count >= 2 else { continue }
+                let ordered = matchedConcepts.sorted {
+                    let lhsRange = lower.range(of: $0.name.lowercased())?.lowerBound ?? lower.startIndex
+                    let rhsRange = lower.range(of: $1.name.lowercased())?.lowerBound ?? lower.startIndex
+                    return lhsRange < rhsRange
+                }
+                let source = ordered[0]
+                let target = ordered[1]
+                fallbackRelationships.append(
+                    KnowledgeRelationship(
+                        sourceID: source.id,
+                        targetID: target.id,
+                        relationKind: .relatedTo,
+                        relation: KnowledgeRelationshipKind.relatedTo.rawValue,
+                        sourceLocations: [
+                            KnowledgeSourceLocation(
+                                sectionID: source.id,
+                                sectionTitle: source.name,
+                                lineStart: index + 1,
+                                lineEnd: index + 1,
+                                order: index,
+                                snippet: sentence
+                            )
+                        ],
+                        confidence: 0.45
+                    )
+                )
+            }
+            if !fallbackRelationships.isEmpty {
+                knowledge.relationships = mergeRelationships(fallbackRelationships)
+            }
+        }
         knowledge.metadata.noteID = knowledge.metadata.noteID.isEmpty ? signature : knowledge.metadata.noteID
         knowledge.metadata.title = noteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         knowledge.metadata.approximateTokenCount = structure.complexity.tokenEstimate
@@ -168,6 +224,181 @@ final class KnowledgeExtractionEngine {
         )
         let debugReport = buildDebugReport(
             noteTitle: noteTitle,
+            sourceSignature: signature,
+            strategy: strategy,
+            fromCache: false,
+            knowledge: knowledge,
+            validation: finalValidation,
+            metrics: qualityMetrics,
+            noiseSamples: noiseSamples(in: normalizedNoteText)
+        ).updating(
+            chunkRuns: chunkRuns,
+            mergedKnowledge: knowledge,
+            validationWarnings: finalValidation.issues.map { "\($0.field): \($0.message)" },
+            latency: totalLatency,
+            retryCount: totalRetries,
+            tokenCount: totalTokens
+        )
+
+        return KnowledgeExtractionRun(
+            knowledge: knowledge,
+            structure: structure,
+            strategy: strategy,
+            fromCache: false,
+            qualityMetrics: qualityMetrics,
+            debugReport: debugReport
+        )
+    }
+
+    private func chunkedExtractRun(from structure: DocumentStructure, notebookText: String) async -> KnowledgeExtractionRun {
+        let normalizedNoteText = structure.normalizedText
+        let normalizedNotebookText = normalize(notebookText)
+        let signature = signatureFor(noteTitle: structure.title, noteText: normalizedNoteText, notebookText: normalizedNotebookText)
+        let strategy = strategyFor(text: normalizedNoteText)
+        let chunks = SemanticChunker.shared.chunk(
+            title: structure.title,
+            structure: structure,
+            contextLimit: Int(AIRuntimeConfig.current.llama.contextSize)
+        )
+
+        if let cached = KnowledgeExtractionCache.shared.cachedKnowledge(for: signature) {
+            let validation = KnowledgeValidator.validate(payload: cached, structure: structure)
+            let chunkRuns = buildCachedChunkReports(
+                chunks: chunks,
+                noteTitle: structure.title,
+                cachedKnowledge: cached,
+                signature: signature,
+                notebookText: normalizedNotebookText,
+                strategy: strategy
+            )
+            let qualityMetrics = buildQualityMetrics(
+                knowledge: cached,
+                structure: structure,
+                validation: validation,
+                noiseSamples: noiseSamples(in: normalizedNoteText)
+            )
+            return KnowledgeExtractionRun(
+                knowledge: cached,
+                structure: structure,
+                strategy: strategyFor(text: normalizedNoteText),
+                fromCache: true,
+                qualityMetrics: qualityMetrics,
+                debugReport: buildDebugReport(
+                    noteTitle: structure.title,
+                    sourceSignature: signature,
+                    strategy: strategyFor(text: normalizedNoteText),
+                    fromCache: true,
+                    knowledge: cached,
+                    validation: validation,
+                    metrics: qualityMetrics,
+                    noiseSamples: noiseSamples(in: normalizedNoteText)
+                ).updating(
+                    chunkRuns: chunkRuns,
+                    mergedKnowledge: cached,
+                    validationWarnings: validation.issues.map { "\($0.field): \($0.message)" },
+                    latency: 0,
+                    retryCount: 0,
+                    tokenCount: chunkRuns.reduce(0) { $0 + $1.tokenCount }
+                )
+            )
+        }
+
+        var knowledge = StructuredKnowledge()
+        var chunkRuns: [KnowledgeExtractionChunkDebug] = []
+        var totalLatency: TimeInterval = 0
+        var totalTokens = 0
+        var totalRetries = 0
+
+        for chunk in chunks {
+            let chunkStructure = DocumentPreprocessor.shared.preprocess(title: structure.title, text: chunk.content)
+            let heuristic = buildHeuristicKnowledge(
+                noteTitle: structure.title,
+                structure: chunkStructure,
+                notebookText: normalizedNotebookText,
+                sourceSignature: "\(signature)#chunk-\(chunk.chunkIndex)",
+                strategy: strategy
+            )
+
+            let chunkResult = await extractChunk(
+                chunk: chunk,
+                noteTitle: structure.title,
+                structure: chunkStructure,
+                heuristic: heuristic,
+                strategy: strategy
+            )
+
+            knowledge = mergeChunkKnowledge(knowledge, with: chunkResult.mergedKnowledge)
+            chunkRuns.append(chunkResult.debug)
+            totalLatency += chunkResult.debug.latency
+            totalTokens += chunkResult.debug.tokenCount
+            totalRetries += chunkResult.debug.retryCount
+        }
+
+        let globalRelationships = buildRelationships(concepts: knowledge.concepts, sentences: splitSentences(normalizedNoteText))
+        if !globalRelationships.isEmpty {
+            knowledge.relationships = mergeRelationships(knowledge.relationships + globalRelationships)
+        }
+        if knowledge.relationships.isEmpty && knowledge.concepts.count >= 2 {
+            let sentences = splitSentences(normalizedNoteText)
+            var fallbackRelationships: [KnowledgeRelationship] = []
+            for (index, sentence) in sentences.enumerated() {
+                let lower = sentence.lowercased()
+                let matchedConcepts = knowledge.concepts.filter { concept in
+                    ([concept.name] + concept.aliases).contains(where: { lower.contains($0.lowercased()) })
+                }
+                guard matchedConcepts.count >= 2 else { continue }
+                let ordered = matchedConcepts.sorted {
+                    let lhsRange = lower.range(of: $0.name.lowercased())?.lowerBound ?? lower.startIndex
+                    let rhsRange = lower.range(of: $1.name.lowercased())?.lowerBound ?? lower.startIndex
+                    return lhsRange < rhsRange
+                }
+                let source = ordered[0]
+                let target = ordered[1]
+                fallbackRelationships.append(
+                    KnowledgeRelationship(
+                        sourceID: source.id,
+                        targetID: target.id,
+                        relationKind: .relatedTo,
+                        relation: KnowledgeRelationshipKind.relatedTo.rawValue,
+                        sourceLocations: [
+                            KnowledgeSourceLocation(
+                                sectionID: source.id,
+                                sectionTitle: source.name,
+                                lineStart: index + 1,
+                                lineEnd: index + 1,
+                                order: index,
+                                snippet: sentence
+                            )
+                        ],
+                        confidence: 0.45
+                    )
+                )
+            }
+            if !fallbackRelationships.isEmpty {
+                knowledge.relationships = mergeRelationships(fallbackRelationships)
+            }
+        }
+        knowledge.metadata.noteID = knowledge.metadata.noteID.isEmpty ? signature : knowledge.metadata.noteID
+        knowledge.metadata.title = structure.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        knowledge.metadata.approximateTokenCount = structure.complexity.tokenEstimate
+        knowledge.metadata.sectionCount = structure.sections.count
+        knowledge.metadata.sourceSignature = signature
+        knowledge.title = knowledge.title.isEmpty ? structure.title.trimmingCharacters(in: .whitespacesAndNewlines) : knowledge.title
+        if knowledge.topics.isEmpty {
+            knowledge.topics = extractTopics(from: structure.title, text: normalizedNoteText)
+        }
+        knowledge = KnowledgeValidator.normalize(payload: knowledge)
+        KnowledgeExtractionCache.shared.store(knowledge, for: signature)
+
+        let finalValidation = KnowledgeValidator.validate(payload: knowledge, structure: structure)
+        let qualityMetrics = buildQualityMetrics(
+            knowledge: knowledge,
+            structure: structure,
+            validation: finalValidation,
+            noiseSamples: noiseSamples(in: normalizedNoteText)
+        )
+        let debugReport = buildDebugReport(
+            noteTitle: structure.title,
             sourceSignature: signature,
             strategy: strategy,
             fromCache: false,
@@ -1201,6 +1432,8 @@ final class KnowledgeExtractionEngine {
             return .equation
         case .table:
             return .table
+        case .quote, .root:
+            return .paragraph
         }
     }
 
@@ -1303,7 +1536,17 @@ final class KnowledgeExtractionEngine {
             " leads to ",
             " causes ",
             " produces ",
-            " results in "
+            " results in ",
+            " protects ",
+            " divides ",
+            " form ",
+            " forms ",
+            " creates ",
+            " create ",
+            " contains ",
+            " includes ",
+            " allows ",
+            " enables "
         ]
 
         let lower = sentence.lowercased()
@@ -1467,7 +1710,7 @@ final class KnowledgeExtractionEngine {
             if noiseTokens.contains(word) { return false }
             let isAcronym = cleaned == cleaned.uppercased() && cleaned.count <= 6
             let looksTechnical = cleaned.contains(where: { $0.isNumber }) || cleaned.contains("-") || cleaned.contains("+")
-            let looksSpecific = cleaned.count >= 5 && !genericEnglishWords.contains(word)
+            let looksSpecific = cleaned.count >= 4 && !genericEnglishWords.contains(word)
             return isAcronym || looksTechnical || looksSpecific
         }
 

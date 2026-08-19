@@ -174,8 +174,10 @@ final class KnowledgeExtractionEngineTests: XCTestCase {
 
     func testQwen3IsThePreferredLocalModel() {
         let library = AIModelLibrary.shared
+        let snapshot = library.refreshSnapshot()
         XCTAssertEqual(library.preferredModelID, "qwen-3-4b")
         XCTAssertEqual(library.preferredCatalogModel(for: .advanced)?.id, "qwen-3-4b")
+        XCTAssertEqual(snapshot.catalog.first?.fileName, "Qwen3-4B-Q4_K_M.gguf")
     }
 
     func testValidatorFlagsDuplicateConceptsAndInvalidRelationships() {

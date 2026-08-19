@@ -53,7 +53,7 @@ struct EditorView: View {
                     canGenerateStudyMaterials: selectedNoteID != nil,
                     canUpdateKnowledgeGraph: selectedNoteID != nil
                 )
-                .frame(height: 58)
+                .frame(minHeight: 58)
                 .background(Color.bgEditor)
                 .zIndex(2)
 

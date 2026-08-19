@@ -9,14 +9,20 @@ enum DocumentSectionKind: String, Codable, CaseIterable, Sendable {
     case codeBlock
     case equation
     case table
+    case quote
+    case root
 }
 
 struct DocumentSection: Identifiable, Codable, Equatable, Sendable {
-    var id: UUID = UUID()
+    var id: String = UUID().uuidString
     var kind: DocumentSectionKind
     var title: String = ""
     var content: String
     var level: Int = 0
+    var parentID: String?
+    var childIDs: [String] = []
+    var blockIDs: [String] = []
+    var order: Int = 0
     var startLine: Int
     var endLine: Int
 }
@@ -25,6 +31,9 @@ struct DocumentListItem: Codable, Equatable, Sendable {
     var text: String
     var line: Int
     var isNumbered: Bool
+    var style: DocumentListStyle = .bullet
+    var indentationLevel: Int = 0
+    var marker: String = ""
 }
 
 struct DocumentCodeBlock: Codable, Equatable, Sendable {
@@ -32,38 +41,14 @@ struct DocumentCodeBlock: Codable, Equatable, Sendable {
     var language: String?
     var startLine: Int
     var endLine: Int
+    var blockID: String = ""
 }
 
 struct DocumentTable: Codable, Equatable, Sendable {
     var rows: [[String]]
     var startLine: Int
     var endLine: Int
-}
-
-struct DocumentComplexityEstimate: Codable, Equatable, Sendable {
-    var tokenEstimate: Int
-    var sentenceCount: Int
-    var headingCount: Int
-    var listCount: Int
-    var codeBlockCount: Int
-    var equationCount: Int
-    var tableCount: Int
-    var complexityScore: Double
-}
-
-struct DocumentStructure: Codable, Equatable, Sendable {
-    var title: String
-    var originalText: String
-    var normalizedText: String
-    var cleanedText: String
-    var sourceSignature: String
-    var sections: [DocumentSection]
-    var headings: [String]
-    var lists: [DocumentListItem]
-    var codeBlocks: [DocumentCodeBlock]
-    var equations: [String]
-    var tables: [DocumentTable]
-    var complexity: DocumentComplexityEstimate
+    var blockID: String = ""
 }
 
 final class DocumentPreprocessor {
@@ -72,67 +57,15 @@ final class DocumentPreprocessor {
     private init() {}
 
     func preprocess(title: String, text: String) -> DocumentStructure {
-        let normalized = normalize(text)
-        let lines = normalized.components(separatedBy: .newlines)
-        let sections = buildSections(from: lines)
-        let headings = sections.filter { $0.kind == .heading || $0.kind == .numberedSection }.map { $0.title.isEmpty ? $0.content : $0.title }
-        let lists = extractLists(from: lines)
-        let codeBlocks = extractCodeBlocks(from: lines)
-        let equations = extractEquations(from: lines)
-        let tables = extractTables(from: lines)
-        let complexity = estimateComplexity(
-            text: normalized,
-            headings: headings,
-            lists: lists,
-            codeBlocks: codeBlocks,
-            equations: equations,
-            tables: tables
-        )
-
-        return DocumentStructure(
-            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-            originalText: text,
-            normalizedText: normalized,
-            cleanedText: normalized,
-            sourceSignature: signature(for: title, text: normalized),
-            sections: sections,
-            headings: headings,
-            lists: lists,
-            codeBlocks: codeBlocks,
-            equations: equations,
-            tables: tables,
-            complexity: complexity
-        )
+        do {
+            return try DocumentProcessingPipeline.shared.process(title: title, text: text)
+        } catch {
+            preconditionFailure("Document processing failed: \(error.localizedDescription)")
+        }
     }
 
     func normalize(_ text: String) -> String {
-        let normalizedLineBreaks = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-
-        let cleanedLines = normalizedLineBreaks
-            .components(separatedBy: .newlines)
-            .map { line in
-                line
-                    .replacingOccurrences(of: "\u{00A0}", with: " ")
-                    .replacingOccurrences(of: "—", with: "-")
-                    .replacingOccurrences(of: "–", with: "-")
-                    .replacingOccurrences(of: "•", with: "-")
-                    .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            .reduce(into: [String]()) { result, line in
-                if line.isEmpty {
-                    if result.last?.isEmpty == true {
-                        return
-                    }
-                    result.append("")
-                } else {
-                    result.append(line)
-                }
-            }
-
-        return cleanedLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        DocumentProcessor.shared.normalize(title: "", text: text).normalizedText
     }
 
     private func buildSections(from lines: [String]) -> [DocumentSection] {
@@ -301,15 +234,17 @@ final class DocumentPreprocessor {
         let structureScore = Double(headings.count) * 0.08 + Double(lists.count) * 0.05 + Double(codeBlocks.count) * 0.12 + Double(equations.count) * 0.07 + Double(tables.count) * 0.1
         let lexicalScore = min(1.0, Double(tokenEstimate) / 900.0)
         let complexityScore = min(1.0, 0.18 + structureScore + lexicalScore)
+        let averageSentenceLength = Double(words.count) / Double(sentenceCount)
 
         return DocumentComplexityEstimate(
             tokenEstimate: tokenEstimate,
-            sentenceCount: sentenceCount,
             headingCount: headings.count,
             listCount: lists.count,
             codeBlockCount: codeBlocks.count,
             equationCount: equations.count,
             tableCount: tables.count,
+            sentenceCount: sentenceCount,
+            averageSentenceLength: averageSentenceLength,
             complexityScore: complexityScore
         )
     }
@@ -352,8 +287,6 @@ final class DocumentPreprocessor {
     }
 
     func signature(for title: String, text: String) -> String {
-        let payload = [title, text].joined(separator: "\u{241E}")
-        let digest = SHA256.hash(data: Data(payload.utf8))
-        return digest.compactMap { String(format: "%02x", $0) }.joined()
+        DocumentProcessor.shared.normalize(title: title, text: text).contentHash
     }
 }

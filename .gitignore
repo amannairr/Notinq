@@ -5,9 +5,11 @@
 xcuserdata/
 DerivedData/
 
+# Top-level local evaluation exports
+/Evaluation/
+
 # Local AI models
 *.gguf
 Models/
 Resources/Models/
-
 

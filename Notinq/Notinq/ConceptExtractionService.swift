@@ -7,10 +7,8 @@ final class ConceptExtractionService {
 
     func extractGraph(from note: KnowledgeGraphNoteInput, completion: @escaping (Result<KnowledgeGraphExtractionPayload, Error>) -> Void) {
         Task {
-            let snapshot = await AIService.shared.extractKnowledge(
-                noteTitle: note.title,
-                noteText: note.text
-            )
+            let structure = DocumentPreprocessor.shared.preprocess(title: note.title, text: note.text)
+            let snapshot = await AIService.shared.extractKnowledge(from: structure)
             let payload = KnowledgeGraphExtractionPayload(
                 concepts: snapshot.concepts.map {
                     KnowledgeGraphExtractionConcept(

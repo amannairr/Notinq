@@ -23,12 +23,27 @@ final class LearningEngine {
     private init() {}
 
     func extractStructuredKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StructuredKnowledge {
-        let result = await pipeline.extractKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await extractStructuredKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func extractStructuredKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StructuredKnowledge {
+        let result = await pipeline.extractKnowledge(
+            noteTitle: structure.title,
+            noteText: structure.normalizedText,
+            notebookText: notebookText
+        )
         return result.structuredKnowledge
     }
 
     func extractKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StudyKnowledgeSnapshot {
-        let knowledge = await extractStructuredKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        let knowledge = await extractStructuredKnowledge(from: structure, notebookText: notebookText)
+        return knowledge.legacySnapshotRepresentation()
+    }
+
+    func extractKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StudyKnowledgeSnapshot {
+        let knowledge = await extractStructuredKnowledge(from: structure, notebookText: notebookText)
         return knowledge.legacySnapshotRepresentation()
     }
 
@@ -38,7 +53,17 @@ final class LearningEngine {
         notebookText: String = "",
         existingStudyData: NoteStudyData
     ) async -> NoteStudyData {
-        let knowledge = await extractStructuredKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        let knowledge = await extractStructuredKnowledge(from: structure, notebookText: notebookText)
+        return generateStudyData(from: knowledge, existingStudyData: existingStudyData)
+    }
+
+    func generateStudyData(
+        from structure: DocumentStructure,
+        notebookText: String = "",
+        existingStudyData: NoteStudyData
+    ) async -> NoteStudyData {
+        let knowledge = await extractStructuredKnowledge(from: structure, notebookText: notebookText)
         return generateStudyData(from: knowledge, existingStudyData: existingStudyData)
     }
 
@@ -47,9 +72,9 @@ final class LearningEngine {
         noteText: String,
         notebookText: String = ""
     ) async -> NoteStudyData {
-        await generateStudyData(
-            noteTitle: noteTitle,
-            noteText: noteText,
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await generateStudyData(
+            from: structure,
             notebookText: notebookText,
             existingStudyData: NoteStudyData()
         )

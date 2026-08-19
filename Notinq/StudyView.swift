@@ -34,6 +34,10 @@ private extension StudyView {
         return selected.isEmpty ? noteText.trimmingCharacters(in: .whitespacesAndNewlines) : selected
     }
 
+    var activeDocumentStructure: DocumentStructure {
+        DocumentPreprocessor.shared.preprocess(title: noteLabel, text: noteContentSource)
+    }
+
     var notebookNoteTexts: [String] {
         appState.folders.flatMap { folder in
             folder.notes.map { $0.content }
@@ -85,8 +89,8 @@ private extension StudyView {
 
     func generateLearningInsights() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
@@ -94,8 +98,7 @@ private extension StudyView {
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -118,8 +121,8 @@ private extension StudyView {
 
     func generateFlashcards() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
@@ -127,8 +130,7 @@ private extension StudyView {
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -151,8 +153,8 @@ private extension StudyView {
 
     func generateQuizSet() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
@@ -160,14 +162,13 @@ private extension StudyView {
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
             await MainActor.run {
                 appState.updateStudyData(generated, for: noteID)
-                let quizSet = generated.quizSets.first ?? buildQuizSet(from: text)
+                let quizSet = generated.quizSets.first ?? buildQuizSet(from: structure.normalizedText)
                 let artifact = buildArtifact(
                     kind: .quizGenerator,
                     title: quizSet.title,
@@ -183,8 +184,8 @@ private extension StudyView {
 
     func generateSummary() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
@@ -192,8 +193,7 @@ private extension StudyView {
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -215,8 +215,8 @@ private extension StudyView {
 
     func generateKeyConcepts() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
@@ -224,8 +224,7 @@ private extension StudyView {
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -245,10 +244,30 @@ private extension StudyView {
         }
     }
 
+    func openKnowledgeExtractionDebugger() {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            transientStatusMessage = "Add some note content first."
+            return
+        }
+
+        Task {
+            let report = await AIService.shared.inspectKnowledgeExtraction(
+                from: structure,
+                notebookText: notebookCombinedText
+            )
+            await MainActor.run {
+                knowledgeExtractionDebuggerReport = report
+                isShowingKnowledgeExtractionDebugger = true
+                transientStatusMessage = "Opened knowledge extraction debugger."
+            }
+        }
+    }
+
     func generateExamPrep() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
@@ -256,8 +275,7 @@ private extension StudyView {
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -279,14 +297,13 @@ private extension StudyView {
 
     func generateConceptMap() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -306,14 +323,13 @@ private extension StudyView {
 
     func generateActiveRecallPrompts() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -335,14 +351,13 @@ private extension StudyView {
 
     func generateNotebookKnowledgeGaps() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -362,14 +377,13 @@ private extension StudyView {
 
     func generateLearningMemory() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let currentStudyData = studyData
         Task {
             let generated = await AIService.shared.generateStudyData(
-                noteTitle: noteLabel,
-                noteText: text,
+                from: structure,
                 notebookText: notebookCombinedText,
                 existingStudyData: currentStudyData
             )
@@ -1886,6 +1900,9 @@ private extension StudyView {
                 }
                 quickAction("Open Insights", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "chart.line.uptrend.xyaxis") {
                     focusStudyTool(.learningInsights)
+                }
+                quickAction("Debug Extraction", tint: Color(red: 0.53, green: 0.34, blue: 0.71), icon: "wrench.and.screwdriver") {
+                    openKnowledgeExtractionDebugger()
                 }
             }
         }
@@ -3454,6 +3471,8 @@ struct StudyView: View {
     @State private var isFlashcardInteractionLocked: Bool = false
     @State private var activeRecallIndex: Int = 0
     @State private var isActiveRecallAnswerRevealed: Bool = false
+    @State private var knowledgeExtractionDebuggerReport: KnowledgeExtractionDebugReport?
+    @State private var isShowingKnowledgeExtractionDebugger: Bool = false
     @State private var selectedSummaryMode: StudySummaryMode = .executive
     @State private var expandedSupplementalSections: Set<SupplementalStudySection> = []
     @State private var expandedConceptNodeIDs: Set<UUID> = []
@@ -3651,6 +3670,21 @@ struct StudyView: View {
             guard noteHasContent, noteID != nil else { return }
             generateAllStudyMaterials()
             onAutoGenerateStudyMaterialsConsumed()
+        }
+        .sheet(isPresented: $isShowingKnowledgeExtractionDebugger) {
+            if let report = knowledgeExtractionDebuggerReport {
+                KnowledgeExtractionDebuggerView(report: report)
+            } else {
+                VStack(spacing: 12) {
+                    Text("No extraction debug data available.")
+                        .font(.headline)
+                    Text("Run the debugger from a note with content to inspect the raw chunk, prompt, and merged knowledge.")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .frame(minWidth: 520, minHeight: 320)
+            }
         }
     }
 

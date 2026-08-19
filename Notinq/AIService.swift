@@ -222,19 +222,30 @@ final class AIService {
     }
 
     func extractStructuredKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StructuredKnowledge {
-        await LearningEngine.shared.extractStructuredKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await extractStructuredKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func extractStructuredKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StructuredKnowledge {
+        await LearningEngine.shared.extractStructuredKnowledge(from: structure, notebookText: notebookText)
     }
 
     func extractKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StudyKnowledgeSnapshot {
-        await LearningEngine.shared.extractKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await extractKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func extractKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StudyKnowledgeSnapshot {
+        await LearningEngine.shared.extractKnowledge(from: structure, notebookText: notebookText)
     }
 
     func inspectKnowledgeExtraction(noteTitle: String, noteText: String, notebookText: String = "") async -> KnowledgeExtractionDebugReport {
-        await KnowledgeExtractionEngine.shared.inspectExtraction(
-            noteTitle: noteTitle,
-            noteText: noteText,
-            notebookText: notebookText
-        )
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await inspectKnowledgeExtraction(from: structure, notebookText: notebookText)
+    }
+
+    func inspectKnowledgeExtraction(from structure: DocumentStructure, notebookText: String = "") async -> KnowledgeExtractionDebugReport {
+        await KnowledgeExtractionEngine.shared.inspectExtraction(from: structure, notebookText: notebookText)
     }
 
     func generateStudyData(
@@ -243,7 +254,16 @@ final class AIService {
         notebookText: String = "",
         existingStudyData: NoteStudyData
     ) async -> NoteStudyData {
-        let knowledge = await extractStructuredKnowledge(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await generateStudyData(from: structure, notebookText: notebookText, existingStudyData: existingStudyData)
+    }
+
+    func generateStudyData(
+        from structure: DocumentStructure,
+        notebookText: String = "",
+        existingStudyData: NoteStudyData
+    ) async -> NoteStudyData {
+        let knowledge = await extractStructuredKnowledge(from: structure, notebookText: notebookText)
         return LearningEngine.shared.generateStudyData(from: knowledge, existingStudyData: existingStudyData)
     }
 
@@ -252,12 +272,8 @@ final class AIService {
         noteText: String,
         notebookText: String = ""
     ) async -> NoteStudyData {
-        await generateStudyData(
-            noteTitle: noteTitle,
-            noteText: noteText,
-            notebookText: notebookText,
-            existingStudyData: NoteStudyData()
-        )
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await generateStudyData(from: structure, notebookText: notebookText, existingStudyData: NoteStudyData())
     }
 }
 
