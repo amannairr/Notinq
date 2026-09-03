@@ -157,6 +157,10 @@ private extension JSONEncoder {
     }
 }
 
-#Preview {
-    KnowledgeExtractionDebuggerView(report: KnowledgeExtractionDebugReport())
+#if DEBUG
+struct KnowledgeExtractionDebuggerView_Previews: PreviewProvider {
+    static var previews: some View {
+        KnowledgeExtractionDebuggerView(report: KnowledgeExtractionDebugReport())
+    }
 }
+#endif

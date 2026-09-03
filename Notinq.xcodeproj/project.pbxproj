@@ -75,10 +75,43 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		075A89EE303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notinq/Notinq_Benchmark_Dataset/algorithms_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/algorithms.txt,
+				Notinq/Notinq_Benchmark_Dataset/biology_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/biology.txt,
+				Notinq/Notinq_Benchmark_Dataset/databases_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/databases.txt,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning.txt,
+				Notinq/Notinq_Benchmark_Dataset/statistics_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/statistics.txt,
+			);
+			target = 07279D992F8AA40400A1D363 /* NotinqTests */;
+		};
+		075A89EF303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqUITests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notinq/Notinq_Benchmark_Dataset/algorithms_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/algorithms.txt,
+				Notinq/Notinq_Benchmark_Dataset/biology_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/biology.txt,
+				Notinq/Notinq_Benchmark_Dataset/databases_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/databases.txt,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning.txt,
+				Notinq/Notinq_Benchmark_Dataset/statistics_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/statistics.txt,
+			);
+			target = 07279DA32F8AA40400A1D363 /* NotinqUITests */;
+		};
 		07B462752FA4F9BE009B2513 /* Exceptions for "Notinq" folder in "Notinq" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"Resources/ggml-metal.metal",
 			);
 			target = 07279D8A2F8AA40300A1D363 /* Notinq */;
 		};
@@ -89,6 +122,8 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				07B462752FA4F9BE009B2513 /* Exceptions for "Notinq" folder in "Notinq" target */,
+				075A89EE303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqTests" target */,
+				075A89EF303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqUITests" target */,
 			);
 			path = Notinq;
 			sourceTree = "<group>";

@@ -10,43 +10,45 @@ struct SettingsOverlayView: View {
     #endif
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.25)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    appState.isSettingsOpen = false
-                }
+        NavigationStack {
+            ZStack {
+                Color.black.opacity(0.25)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        appState.isSettingsOpen = false
+                    }
 
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                aiSettingsSection
-                privacySection
-                voiceSection
-                accountSection
-                debugSection
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    aiSettingsSection
+                    privacySection
+                    voiceSection
+                    accountSection
+                    debugSection
+                }
+                .padding(24)
+                .frame(width: 460)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white)
+                )
+                .shadow(color: Color.black.opacity(0.14), radius: 26, x: 0, y: 14)
             }
-            .padding(24)
-            .frame(width: 460)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white)
-            )
-            .shadow(color: Color.black.opacity(0.14), radius: 26, x: 0, y: 14)
+            .onAppear {
+                modelPathSummary = AIModelManager.shared.currentModelPathDescription()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .notinqLocalModelDidChange)) { _ in
+                modelPathSummary = AIModelManager.shared.currentModelPathDescription()
+            }
+            #if DEBUG
+            .sheet(isPresented: $isShowingAIEvaluation) {
+                AIEvaluationView()
+            }
+            .sheet(isPresented: $isShowingLocalAIPlayground) {
+                LocalAIPlaygroundView()
+            }
+            #endif
         }
-        .onAppear {
-            modelPathSummary = AIModelManager.shared.currentModelPathDescription()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .notinqLocalModelDidChange)) { _ in
-            modelPathSummary = AIModelManager.shared.currentModelPathDescription()
-        }
-        #if DEBUG
-        .sheet(isPresented: $isShowingAIEvaluation) {
-            AIEvaluationView()
-        }
-        .sheet(isPresented: $isShowingLocalAIPlayground) {
-            LocalAIPlaygroundView()
-        }
-        #endif
     }
 
     private var header: some View {
@@ -184,6 +186,11 @@ struct SettingsOverlayView: View {
 
             Button("Open Local AI Playground") {
                 isShowingLocalAIPlayground = true
+            }
+            .buttonStyle(.bordered)
+
+            NavigationLink("Knowledge Extraction Tests") {
+                ExtractionTestView()
             }
             .buttonStyle(.bordered)
         }

@@ -433,3 +433,218 @@ enum KnowledgeExtractionValidator {
         KnowledgeValidator.buildRetryPrompt(for: issues)
     }
 }
+
+struct ExtractionValidationIssue: Codable, Equatable, Sendable {
+    var field: String
+    var message: String
+    var severity: KnowledgeValidationSeverity
+}
+
+struct ExtractionValidationReport: Codable, Equatable, Sendable {
+    var isValid: Bool
+    var issues: [ExtractionValidationIssue]
+    var discardedConceptCount: Int
+    var discardedRelationshipCount: Int
+    var discardedFactCount: Int
+    var sourceReferenceCount: Int
+
+    static let valid = ExtractionValidationReport(
+        isValid: true,
+        issues: [],
+        discardedConceptCount: 0,
+        discardedRelationshipCount: 0,
+        discardedFactCount: 0,
+        sourceReferenceCount: 0
+    )
+}
+
+enum ExtractionValidator {
+    static func sanitize(payload: CanonicalExtractionPayload) -> (payload: CanonicalExtractionPayload, report: ExtractionValidationReport) {
+        let sourceReferences = sanitizeSourceReferences(payload.sourceReferences)
+        let sourceIDs = Set(sourceReferences.map(\.chunkID))
+
+        var issues: [ExtractionValidationIssue] = []
+        var discardedConceptCount = 0
+        var discardedRelationshipCount = 0
+        var discardedFactCount = 0
+
+        let resolvedConcepts = ConceptResolver().resolve(payload.concepts)
+        let sanitizedConcepts = resolvedConcepts.concepts.compactMap { concept -> ExtractionConcept? in
+            let trimmedName = concept.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else {
+                discardedConceptCount += 1
+                issues.append(.init(field: "concepts.name", message: "Discarded concept with empty name", severity: .warning))
+                return nil
+            }
+
+            var sanitized = concept
+            sanitized.name = trimmedName
+            if let description = sanitized.descriptionText?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
+                sanitized.descriptionText = description
+            } else {
+                sanitized.descriptionText = nil
+            }
+            sanitized.importanceScore = clamp(sanitized.importanceScore)
+            sanitized.confidenceScore = clamp(sanitized.confidenceScore)
+            sanitized.aliases = dedupeStrings(sanitized.aliases)
+            sanitized.sourceChunkIDs = dedupeStrings(sanitized.sourceChunkIDs.filter { sourceIDs.isEmpty || sourceIDs.contains($0) })
+
+            if sanitized.sourceChunkIDs.isEmpty && !sourceIDs.isEmpty {
+                discardedConceptCount += 1
+                issues.append(.init(field: "concepts.source_chunk_ids", message: "Discarded concept without valid source references", severity: .warning))
+                return nil
+            }
+
+            return sanitized
+        }
+
+        let validConceptIDs = Set(sanitizedConcepts.map { $0.id })
+
+        let sanitizedRelationships = payload.relationships.compactMap { relationship -> ExtractionRelationship? in
+            guard let normalizedType = ExtractionRelationshipType.normalized(from: relationship.relationshipType.rawValue) else {
+                discardedRelationshipCount += 1
+                issues.append(.init(field: "relationships.type", message: "Discarded unsupported relationship type: \(relationship.relationshipType.rawValue)", severity: .warning))
+                return nil
+            }
+
+            let sourceID = relationship.sourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let targetID = relationship.targetID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sourceID.isEmpty, !targetID.isEmpty else {
+                discardedRelationshipCount += 1
+                issues.append(.init(field: "relationships.endpoints", message: "Discarded empty relationship endpoints", severity: .warning))
+                return nil
+            }
+            guard sourceID != targetID else {
+                discardedRelationshipCount += 1
+                issues.append(.init(field: "relationships.selfLoop", message: "Discarded self-loop relationship for \(sourceID)", severity: .warning))
+                return nil
+            }
+
+            let filteredSourceChunkIDs = dedupeStrings(relationship.sourceChunkIDs.filter { sourceIDs.isEmpty || sourceIDs.contains($0) })
+            if filteredSourceChunkIDs.isEmpty && !sourceIDs.isEmpty {
+                discardedRelationshipCount += 1
+                issues.append(.init(field: "relationships.source_chunk_ids", message: "Discarded relationship without valid source references", severity: .warning))
+                return nil
+            }
+
+            let sourceKnown = validConceptIDs.contains(sourceID)
+            let targetKnown = validConceptIDs.contains(targetID)
+            if !sourceKnown || !targetKnown {
+                discardedRelationshipCount += 1
+                issues.append(.init(field: "relationships.endpoints", message: "Discarded relationship referencing unknown concepts", severity: .warning))
+                return nil
+            }
+
+            return ExtractionRelationship(
+                sourceID: sourceID,
+                targetID: targetID,
+                relationshipType: normalizedType,
+                confidenceScore: clamp(relationship.confidenceScore),
+                sourceChunkIDs: filteredSourceChunkIDs
+            )
+        }
+
+        let sanitizedFacts = payload.facts.compactMap { fact -> ExtractionFact? in
+            let trimmedStatement = fact.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedStatement.isEmpty else {
+                discardedFactCount += 1
+                issues.append(.init(field: "facts.statement", message: "Discarded empty fact statement", severity: .warning))
+                return nil
+            }
+
+            let filteredConceptIDs = dedupeStrings(fact.conceptIDs.filter { validConceptIDs.contains($0) })
+            let filteredSourceChunkIDs = dedupeStrings(fact.sourceChunkIDs.filter { sourceIDs.isEmpty || sourceIDs.contains($0) })
+            guard !filteredSourceChunkIDs.isEmpty || sourceIDs.isEmpty else {
+                discardedFactCount += 1
+                issues.append(.init(field: "facts.source_chunk_ids", message: "Discarded fact without valid source references", severity: .warning))
+                return nil
+            }
+
+            return ExtractionFact(
+                id: fact.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? deterministicFactID(for: trimmedStatement) : fact.id.trimmingCharacters(in: .whitespacesAndNewlines),
+                statement: trimmedStatement,
+                confidenceScore: clamp(fact.confidenceScore),
+                conceptIDs: filteredConceptIDs,
+                sourceChunkIDs: filteredSourceChunkIDs
+            )
+        }
+
+        let sanitizedPayload = CanonicalExtractionPayload(
+            concepts: sanitizedConcepts,
+            facts: sanitizedFacts,
+            relationships: sanitizedRelationships,
+            sourceReferences: sourceReferences
+        )
+
+        return (
+            payload: sanitizedPayload,
+            report: ExtractionValidationReport(
+                isValid: issues.isEmpty,
+                issues: issues,
+                discardedConceptCount: discardedConceptCount,
+                discardedRelationshipCount: discardedRelationshipCount,
+                discardedFactCount: discardedFactCount,
+                sourceReferenceCount: sourceReferences.count
+            )
+        )
+    }
+
+    static func validate(payload: CanonicalExtractionPayload) -> ExtractionValidationReport {
+        sanitize(payload: payload).report
+    }
+
+    static func normalize(payload: CanonicalExtractionPayload) -> CanonicalExtractionPayload {
+        sanitize(payload: payload).payload
+    }
+
+    static func buildRetryPrompt(for report: ExtractionValidationReport) -> String {
+        let issues = report.issues.map { "\($0.field): \($0.message)" }.joined(separator: "; ")
+        return "The previous extraction was incomplete or invalid. Fix the following issues and return only valid JSON: \(issues)"
+    }
+
+    private static func sanitizeSourceReferences(_ sourceReferences: [ExtractionSourceReference]) -> [ExtractionSourceReference] {
+        var seen = Set<String>()
+        return sourceReferences.compactMap { reference in
+            let chunkID = reference.chunkID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !chunkID.isEmpty, !seen.contains(chunkID) else { return nil }
+            seen.insert(chunkID)
+            return ExtractionSourceReference(
+                chunkID: chunkID,
+                documentID: reference.documentID.trimmingCharacters(in: .whitespacesAndNewlines),
+                chunkIndex: max(0, reference.chunkIndex),
+                startOffset: reference.startOffset.map { max(0, $0) },
+                endOffset: reference.endOffset.map { max(0, $0) }
+            )
+        }
+    }
+
+    private static func dedupeStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalizedKey(for: trimmed)
+            guard !trimmed.isEmpty, !key.isEmpty, !seen.contains(key) else { return nil }
+            seen.insert(key)
+            return trimmed
+        }
+    }
+
+    private static func deterministicFactID(for statement: String) -> String {
+        let normalized = normalizedKey(for: statement)
+        guard !normalized.isEmpty else { return UUID().uuidString }
+        return "fact-\(normalized.replacingOccurrences(of: " ", with: "-").prefix(48))"
+    }
+
+    private static func normalizedKey(for value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(1.0, max(0.0, value))
+    }
+}

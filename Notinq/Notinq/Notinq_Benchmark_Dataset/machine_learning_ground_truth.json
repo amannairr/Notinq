@@ -1,0 +1,33 @@
+{
+  "concepts": [
+    "Dataset",
+    "Feature",
+    "Model",
+    "Training",
+    "Overfitting",
+    "Neural Network",
+    "Evaluation"
+  ],
+  "relationships": [
+    {
+      "source": "Training",
+      "relationship": "produces",
+      "target": "Model"
+    },
+    {
+      "source": "Overfitting",
+      "relationship": "reduces",
+      "target": "Generalization"
+    },
+    {
+      "source": "Evaluation",
+      "relationship": "measures",
+      "target": "Model"
+    }
+  ],
+  "facts": [
+    "Models learn patterns from data.",
+    "Overfitting harms performance on unseen data.",
+    "Neural networks contain interconnected layers."
+  ]
+}

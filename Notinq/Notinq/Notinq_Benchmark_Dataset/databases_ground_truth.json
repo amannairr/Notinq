@@ -1,0 +1,31 @@
+{
+  "concepts": [
+    "Database",
+    "Table",
+    "SQL",
+    "Index",
+    "Transaction",
+    "Normalization"
+  ],
+  "relationships": [
+    {
+      "source": "Table",
+      "relationship": "stored_in",
+      "target": "Database"
+    },
+    {
+      "source": "Index",
+      "relationship": "improves",
+      "target": "Query Performance"
+    },
+    {
+      "source": "Transaction",
+      "relationship": "maintains",
+      "target": "Consistency"
+    }
+  ],
+  "facts": [
+    "SQL is used to query relational databases.",
+    "Normalization reduces redundancy."
+  ]
+}

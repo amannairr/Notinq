@@ -22,7 +22,6 @@ final class SectionSplitter: SectionSplitting {
         var mutableBlocks = blocks
         var sections: [DocumentSection] = []
         var headingStack: [DocumentSection] = []
-        var nextSectionIndex = 1
         var preambleSectionID: String?
         var sawHeading = false
 
@@ -33,8 +32,9 @@ final class SectionSplitter: SectionSplitting {
             parentID: String?,
             startLine: Int
         ) -> DocumentSection {
+            let order = sections.count
             let section = DocumentSection(
-                id: "section-\(nextSectionIndex)",
+                id: sectionID(level: level, order: order, title: title),
                 kind: kind,
                 title: title,
                 content: "",
@@ -42,11 +42,10 @@ final class SectionSplitter: SectionSplitting {
                 parentID: parentID,
                 childIDs: [],
                 blockIDs: [],
-                order: sections.count,
+                order: order,
                 startLine: startLine,
                 endLine: startLine
             )
-            nextSectionIndex += 1
             return section
         }
 
@@ -120,5 +119,13 @@ final class SectionSplitter: SectionSplitting {
         }
 
         return DocumentSectionSplitResult(blocks: mutableBlocks, sections: sections)
+    }
+
+    private func sectionID(level: Int, order: Int, title: String) -> String {
+        let normalizedTitle = title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: "-", options: .regularExpression)
+        return "section-\(level)-\(order)-\(normalizedTitle)"
     }
 }

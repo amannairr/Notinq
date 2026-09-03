@@ -1,0 +1,7 @@
+[00:00] Professor: Today we discuss statistics.
+[02:00] Professor: Key concepts include Probability, Distribution, Mean, Variance, Hypothesis Test, Confidence Interval.
+[05:00] Professor: Mean summarizes Distribution.
+[05:00] Professor: Variance measures Spread.
+[05:00] Professor: Hypothesis Test uses Probability.
+[08:00] Professor: Probability quantifies uncertainty.
+[08:00] Professor: Confidence intervals estimate parameter ranges.

@@ -41,7 +41,7 @@ struct DocumentMetadata: Codable, Equatable, Sendable {
 }
 
 struct DocumentBlock: Identifiable, Codable, Equatable, Sendable {
-    var id: String = UUID().uuidString
+    var id: String
     var kind: DocumentBlockKind
     var content: String
     var normalizedContent: String

@@ -1,0 +1,8 @@
+[00:00] Professor: Today we discuss machine_learning.
+[02:00] Professor: Key concepts include Dataset, Feature, Model, Training, Overfitting, Neural Network, Evaluation.
+[05:00] Professor: Training produces Model.
+[05:00] Professor: Overfitting reduces Generalization.
+[05:00] Professor: Evaluation measures Model.
+[08:00] Professor: Models learn patterns from data.
+[08:00] Professor: Overfitting harms performance on unseen data.
+[08:00] Professor: Neural networks contain interconnected layers.

@@ -31,6 +31,7 @@ enum KnowledgeProcessingStrategy: String, Codable, Sendable {
 
 struct KnowledgeExtractionResult: Sendable {
     var structuredKnowledge: StructuredKnowledge
+    var canonicalExtraction: CanonicalExtractionPayload
     var snapshot: StudyKnowledgeSnapshot
     var strategy: KnowledgeProcessingStrategy
     var fromCache: Bool
@@ -41,6 +42,7 @@ struct KnowledgeExtractionResult: Sendable {
 
 struct KnowledgeExtractionRun: Sendable {
     var knowledge: StructuredKnowledge
+    var canonicalExtraction: CanonicalExtractionPayload
     var structure: DocumentStructure
     var strategy: KnowledgeProcessingStrategy
     var fromCache: Bool
@@ -104,6 +106,7 @@ final class KnowledgeExtractionEngine {
             )
             return KnowledgeExtractionRun(
                 knowledge: cached,
+                canonicalExtraction: cached.canonicalExtractionPayload(sourceReferences: sourceReferences(for: chunks, sourceSignature: signature)),
                 structure: structure,
                 strategy: strategyFor(text: normalizedNoteText),
                 fromCache: true,
@@ -159,7 +162,11 @@ final class KnowledgeExtractionEngine {
             totalRetries += chunkResult.debug.retryCount
         }
 
-        let globalRelationships = buildRelationships(concepts: knowledge.concepts, sentences: splitSentences(normalizedNoteText))
+        let globalRelationships = buildRelationships(
+            concepts: knowledge.concepts,
+            sentences: splitSentences(normalizedNoteText),
+            sourceSignature: signature
+        )
         if !globalRelationships.isEmpty {
             knowledge.relationships = mergeRelationships(knowledge.relationships + globalRelationships)
         }
@@ -187,7 +194,7 @@ final class KnowledgeExtractionEngine {
                         relation: KnowledgeRelationshipKind.relatedTo.rawValue,
                         sourceLocations: [
                             KnowledgeSourceLocation(
-                                sectionID: source.id,
+                                sectionID: knowledge.sourceLocations.first?.sectionID ?? signature,
                                 sectionTitle: source.name,
                                 lineStart: index + 1,
                                 lineEnd: index + 1,
@@ -242,6 +249,7 @@ final class KnowledgeExtractionEngine {
 
         return KnowledgeExtractionRun(
             knowledge: knowledge,
+            canonicalExtraction: knowledge.canonicalExtractionPayload(sourceReferences: sourceReferences(for: chunks, sourceSignature: signature)),
             structure: structure,
             strategy: strategy,
             fromCache: false,
@@ -279,6 +287,7 @@ final class KnowledgeExtractionEngine {
             )
             return KnowledgeExtractionRun(
                 knowledge: cached,
+                canonicalExtraction: cached.canonicalExtractionPayload(sourceReferences: sourceReferences(for: chunks, sourceSignature: signature)),
                 structure: structure,
                 strategy: strategyFor(text: normalizedNoteText),
                 fromCache: true,
@@ -334,7 +343,11 @@ final class KnowledgeExtractionEngine {
             totalRetries += chunkResult.debug.retryCount
         }
 
-        let globalRelationships = buildRelationships(concepts: knowledge.concepts, sentences: splitSentences(normalizedNoteText))
+        let globalRelationships = buildRelationships(
+            concepts: knowledge.concepts,
+            sentences: splitSentences(normalizedNoteText),
+            sourceSignature: signature
+        )
         if !globalRelationships.isEmpty {
             knowledge.relationships = mergeRelationships(knowledge.relationships + globalRelationships)
         }
@@ -362,7 +375,7 @@ final class KnowledgeExtractionEngine {
                         relation: KnowledgeRelationshipKind.relatedTo.rawValue,
                         sourceLocations: [
                             KnowledgeSourceLocation(
-                                sectionID: source.id,
+                                sectionID: knowledge.sourceLocations.first?.sectionID ?? signature,
                                 sectionTitle: source.name,
                                 lineStart: index + 1,
                                 lineEnd: index + 1,
@@ -417,6 +430,7 @@ final class KnowledgeExtractionEngine {
 
         return KnowledgeExtractionRun(
             knowledge: knowledge,
+            canonicalExtraction: knowledge.canonicalExtractionPayload(sourceReferences: sourceReferences(for: chunks, sourceSignature: signature)),
             structure: structure,
             strategy: strategy,
             fromCache: false,
@@ -439,6 +453,7 @@ final class KnowledgeExtractionEngine {
 
     private struct ChunkExtractionResult {
         var mergedKnowledge: StructuredKnowledge
+        var canonicalExtraction: CanonicalExtractionPayload
         var debug: KnowledgeExtractionChunkDebug
     }
 
@@ -465,10 +480,29 @@ final class KnowledgeExtractionEngine {
         var tokenCount = max(1, chunk.content.split { $0.isWhitespace || $0.isNewline }.count)
         var latency: TimeInterval = 0
         var validationWarnings: [String] = []
+        let sourceReferences = sourceReferences(for: [chunk], sourceSignature: structure.sourceSignature)
+        let heuristicCanonical = heuristic.canonicalExtractionPayload(sourceReferences: sourceReferences)
+        let normalizedHeuristicCanonical = ExtractionValidator.normalize(payload: heuristicCanonical)
+        let normalizedHeuristicLegacy = KnowledgeValidator.normalize(
+            payload: StructuredKnowledge.fromCanonicalExtraction(
+                normalizedHeuristicCanonical,
+                title: noteTitle,
+                sourceSignature: structure.sourceSignature,
+                sourceType: strategy.rawValue,
+                approximateTokenCount: structure.complexity.tokenEstimate,
+                sectionCount: structure.sections.count,
+                difficulty: heuristic.difficulty,
+                keywords: heuristic.keywords,
+                summaryHighlights: heuristic.summaryHighlights,
+                examFocus: heuristic.examFocus,
+                supportingEvidence: heuristic.supportingEvidence
+            )
+        )
 
         guard shouldUseProvider(for: chunk.content) else {
             return ChunkExtractionResult(
-                mergedKnowledge: KnowledgeValidator.normalize(payload: merged),
+                mergedKnowledge: normalizedHeuristicLegacy,
+                canonicalExtraction: normalizedHeuristicCanonical,
                 debug: KnowledgeExtractionChunkDebug(
                     documentID: chunk.documentID,
                     chunkIndex: chunk.chunkIndex,
@@ -478,7 +512,7 @@ final class KnowledgeExtractionEngine {
                     prompt: request.prompt,
                     rawModelResponse: rawResponse,
                     parsedJSON: parsedJSON,
-                    mergedKnowledge: KnowledgeValidator.normalize(payload: merged),
+                    mergedKnowledge: normalizedHeuristicLegacy,
                     validationWarnings: validationWarnings,
                     latency: latency,
                     retryCount: retryCount,
@@ -497,16 +531,29 @@ final class KnowledgeExtractionEngine {
             let repaired = PromptRepairer.repairJSONString(rawResponse) ?? rawResponse
             parsedJSON = repaired
             if let data = repaired.data(using: .utf8),
-               let payload = try? JSONDecoder().decode(StructuredKnowledge.self, from: data) {
-                let normalized = KnowledgeValidator.normalize(payload: payload)
-                let validation = KnowledgeValidator.validate(payload: normalized, structure: structure)
+               let payload = try? JSONDecoder().decode(CanonicalExtractionPayload.self, from: data) {
+                let normalizedCanonical = ExtractionValidator.normalize(payload: payload)
+                let validation = ExtractionValidator.validate(payload: normalizedCanonical)
                 validationWarnings = validation.issues.map { "\($0.field): \($0.message)" }
-                retryCount = validation.shouldRetry ? 1 : 0
-                merged = merge(payload: normalized, with: heuristic)
+                retryCount = validation.isValid ? 0 : 1
+                let legacyPayload = StructuredKnowledge.fromCanonicalExtraction(
+                    normalizedCanonical,
+                    title: noteTitle,
+                    sourceSignature: structure.sourceSignature,
+                    sourceType: strategy.rawValue,
+                    approximateTokenCount: structure.complexity.tokenEstimate,
+                    sectionCount: structure.sections.count,
+                    difficulty: heuristic.difficulty,
+                    keywords: heuristic.keywords,
+                    summaryHighlights: heuristic.summaryHighlights,
+                    examFocus: heuristic.examFocus,
+                    supportingEvidence: heuristic.supportingEvidence
+                )
+                merged = merge(payload: KnowledgeValidator.normalize(payload: legacyPayload), with: heuristic)
 
-                if validation.shouldRetry {
+                if !validation.isValid {
                     let retryRequest = AIGenerationRequest(
-                        prompt: request.prompt + "\n\n" + KnowledgeValidator.buildRetryPrompt(for: validation),
+                        prompt: request.prompt + "\n\n" + ExtractionValidator.buildRetryPrompt(for: validation),
                         systemPrompt: request.systemPrompt,
                         maxTokens: request.maxTokens,
                         temperature: 0.0,
@@ -520,8 +567,22 @@ final class KnowledgeExtractionEngine {
                         let retryRepaired = PromptRepairer.repairJSONString(rawResponse) ?? rawResponse
                         parsedJSON = retryRepaired
                         if let retryData = retryRepaired.data(using: .utf8),
-                           let retryPayload = try? JSONDecoder().decode(StructuredKnowledge.self, from: retryData) {
-                            merged = merge(payload: KnowledgeValidator.normalize(payload: retryPayload), with: heuristic)
+                           let retryPayload = try? JSONDecoder().decode(CanonicalExtractionPayload.self, from: retryData) {
+                            let normalizedRetry = ExtractionValidator.normalize(payload: retryPayload)
+                            let retryLegacy = StructuredKnowledge.fromCanonicalExtraction(
+                                normalizedRetry,
+                                title: noteTitle,
+                                sourceSignature: structure.sourceSignature,
+                                sourceType: strategy.rawValue,
+                                approximateTokenCount: structure.complexity.tokenEstimate,
+                                sectionCount: structure.sections.count,
+                                difficulty: heuristic.difficulty,
+                                keywords: heuristic.keywords,
+                                summaryHighlights: heuristic.summaryHighlights,
+                                examFocus: heuristic.examFocus,
+                                supportingEvidence: heuristic.supportingEvidence
+                            )
+                            merged = merge(payload: KnowledgeValidator.normalize(payload: retryLegacy), with: heuristic)
                             retryCount += 1
                         }
                         latency += retryResponse.metrics?.generationTime ?? 0
@@ -529,7 +590,12 @@ final class KnowledgeExtractionEngine {
                     }
                 }
             } else {
-                validationWarnings = ["parsed_json: Could not decode chunk response into StructuredKnowledge"]
+                validationWarnings = ["parsed_json: Could not decode chunk response into CanonicalExtractionPayload"]
+                if let data = parsedJSON.data(using: .utf8),
+                   let legacyPayload = try? JSONDecoder().decode(StructuredKnowledge.self, from: data) {
+                    let normalizedLegacy = KnowledgeValidator.normalize(payload: legacyPayload)
+                    merged = merge(payload: normalizedLegacy, with: heuristic)
+                }
             }
         } catch {
             validationWarnings = ["provider_error: \(error.localizedDescription)"]
@@ -538,6 +604,9 @@ final class KnowledgeExtractionEngine {
         let normalizedMerged = KnowledgeValidator.normalize(payload: merged)
         return ChunkExtractionResult(
             mergedKnowledge: normalizedMerged,
+            canonicalExtraction: ExtractionValidator.normalize(
+                payload: normalizedMerged.canonicalExtractionPayload(sourceReferences: sourceReferences)
+            ),
             debug: KnowledgeExtractionChunkDebug(
                 documentID: chunk.documentID,
                 chunkIndex: chunk.chunkIndex,
@@ -851,7 +920,7 @@ final class KnowledgeExtractionEngine {
         let sentences = splitSentences(cleanedText)
         let sectionLocations = structure.sections.enumerated().map { index, section in
             KnowledgeSourceLocation(
-                sectionID: "\(index)",
+                sectionID: sourceSignature,
                 sectionTitle: section.title.isEmpty ? section.content : section.title,
                 lineStart: section.startLine + 1,
                 lineEnd: section.endLine + 1,
@@ -884,7 +953,7 @@ final class KnowledgeExtractionEngine {
             let matches = sentences.enumerated().compactMap { index, sentence -> KnowledgeSourceLocation? in
                 guard sentenceMatchesConcept(sentence, concept: concept, aliases: []) else { return nil }
                 return KnowledgeSourceLocation(
-                    sectionID: sections.first?.id ?? "",
+                    sectionID: sourceSignature,
                     sectionTitle: sections.first?.title ?? noteTitle,
                     lineStart: index + 1,
                     lineEnd: index + 1,
@@ -960,7 +1029,7 @@ final class KnowledgeExtractionEngine {
         }
 
         let processes = extractProcessRecords(sentences: sentences, sections: sections)
-        let relationships = buildRelationships(concepts: concepts, sentences: sentences)
+        let relationships = buildRelationships(concepts: concepts, sentences: sentences, sourceSignature: sourceSignature)
         let learningObjectives = concepts.compactMap { concept -> KnowledgeObjective? in
             guard !concept.learningObjective.isEmpty else { return nil }
             return KnowledgeObjective(
@@ -1128,7 +1197,7 @@ final class KnowledgeExtractionEngine {
         return Array(filtered.prefix(4))
     }
 
-    private func buildRelationships(concepts: [KnowledgeConcept], sentences: [String]) -> [KnowledgeRelationship] {
+    private func buildRelationships(concepts: [KnowledgeConcept], sentences: [String], sourceSignature: String) -> [KnowledgeRelationship] {
         guard !concepts.isEmpty else { return [] }
         var relationships: [KnowledgeRelationship] = []
         for (index, sentence) in sentences.enumerated() {
@@ -1145,7 +1214,7 @@ final class KnowledgeExtractionEngine {
                     targetID: endpoints.target.id,
                     relationKind: kind,
                     relation: kind.rawValue,
-                    sourceLocations: [KnowledgeSourceLocation(sectionID: endpoints.source.id, sectionTitle: endpoints.source.name, lineStart: index + 1, lineEnd: index + 1, order: index, snippet: sentence)],
+                    sourceLocations: [KnowledgeSourceLocation(sectionID: sourceSignature, sectionTitle: endpoints.source.name, lineStart: index + 1, lineEnd: index + 1, order: index, snippet: sentence)],
                     confidence: relationshipConfidence(for: sentence, kind: kind, source: endpoints.source, target: endpoints.target)
                 )
             )
@@ -1214,6 +1283,18 @@ final class KnowledgeExtractionEngine {
             noiseTokenCount: noiseSamples.count,
             canonicalRelationshipCounts: Dictionary(grouping: knowledge.relationships, by: { $0.relationKind.rawValue }).mapValues(\.count)
         )
+    }
+
+    private func sourceReferences(for chunks: [SemanticChunk], sourceSignature: String) -> [ExtractionSourceReference] {
+        chunks.map { chunk in
+            ExtractionSourceReference(
+                chunkID: "\(sourceSignature)#chunk-\(chunk.chunkIndex)",
+                documentID: sourceSignature,
+                chunkIndex: chunk.chunkIndex,
+                startOffset: nil,
+                endOffset: nil
+            )
+        }
     }
 
     private func buildDebugReport(
@@ -1788,6 +1869,7 @@ final class KnowledgeExtractionPipeline {
         let run = await engine.extractRun(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
         return KnowledgeExtractionResult(
             structuredKnowledge: run.knowledge,
+            canonicalExtraction: run.canonicalExtraction,
             snapshot: run.knowledge.legacySnapshotRepresentation(),
             strategy: run.strategy,
             fromCache: run.fromCache,

@@ -40,6 +40,7 @@ final class StructureDetector: StructureDetecting {
                 let body = contentLines.dropFirst().dropLast().joined(separator: "\n")
                 blocks.append(
                     DocumentBlock(
+                        id: blockID(kind: .codeBlock, startLine: startLine, endLine: min(index, lines.count - 1)),
                         kind: .codeBlock,
                         content: contentLines.joined(separator: "\n"),
                         normalizedContent: body,
@@ -62,6 +63,7 @@ final class StructureDetector: StructureDetecting {
             if let heading = headingMatch(for: trimmed) {
                 blocks.append(
                     DocumentBlock(
+                        id: blockID(kind: .heading, startLine: index, endLine: index),
                         kind: .heading,
                         content: line,
                         normalizedContent: heading.title,
@@ -96,6 +98,7 @@ final class StructureDetector: StructureDetecting {
                 }
                 blocks.append(
                     DocumentBlock(
+                        id: blockID(kind: .quote, startLine: startLine, endLine: max(startLine, index - 1)),
                         kind: .quote,
                         content: contentLines.joined(separator: "\n"),
                         normalizedContent: values.joined(separator: "\n"),
@@ -118,7 +121,7 @@ final class StructureDetector: StructureDetecting {
                 let startLine = index
                 var contentLines: [String] = [line]
                 var items: [String] = [firstListMatch.text]
-                var listStyle = firstListMatch.style
+                let listStyle = firstListMatch.style
                 index += 1
                 while index < lines.count {
                     let next = lines[index]
@@ -131,6 +134,7 @@ final class StructureDetector: StructureDetecting {
 
                 blocks.append(
                     DocumentBlock(
+                        id: blockID(kind: listStyle == .numbered ? .numberedList : .bulletedList, startLine: startLine, endLine: max(startLine, index - 1)),
                         kind: listStyle == .numbered ? .numberedList : .bulletedList,
                         content: contentLines.joined(separator: "\n"),
                         normalizedContent: items.joined(separator: "\n"),
@@ -165,6 +169,7 @@ final class StructureDetector: StructureDetecting {
 
                 blocks.append(
                     DocumentBlock(
+                        id: blockID(kind: .table, startLine: startLine, endLine: max(startLine, index - 1)),
                         kind: .table,
                         content: contentLines.joined(separator: "\n"),
                         normalizedContent: rows.map { $0.joined(separator: " | ") }.joined(separator: "\n"),
@@ -199,6 +204,7 @@ final class StructureDetector: StructureDetecting {
 
                 blocks.append(
                     DocumentBlock(
+                        id: blockID(kind: .equation, startLine: startLine, endLine: max(startLine, index - 1)),
                         kind: .equation,
                         content: contentLines.joined(separator: "\n"),
                         normalizedContent: equations.joined(separator: "\n"),
@@ -238,6 +244,7 @@ final class StructureDetector: StructureDetecting {
 
             blocks.append(
                 DocumentBlock(
+                    id: blockID(kind: .paragraph, startLine: startLine, endLine: max(startLine, index - 1)),
                     kind: .paragraph,
                     content: paragraphLines.joined(separator: "\n"),
                     normalizedContent: paragraphLines.joined(separator: "\n"),
@@ -339,5 +346,9 @@ final class StructureDetector: StructureDetecting {
     private func language(fromFence fenceLine: String) -> String? {
         let language = fenceLine.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines)
         return language.isEmpty ? nil : String(language)
+    }
+
+    private func blockID(kind: DocumentBlockKind, startLine: Int, endLine: Int) -> String {
+        "\(kind.rawValue)-\(startLine)-\(endLine)"
     }
 }

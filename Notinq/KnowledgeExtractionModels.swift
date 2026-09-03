@@ -557,3 +557,592 @@ extension StudyKnowledgeSnapshot {
         )
     }
 }
+
+enum ExtractionRelationshipType: String, Codable, CaseIterable, Sendable {
+    case prerequisiteOf = "PREREQUISITE_OF"
+    case partOf = "PART_OF"
+    case exampleOf = "EXAMPLE_OF"
+    case causes = "CAUSES"
+    case dependsOn = "DEPENDS_ON"
+    case relatedTo = "RELATED_TO"
+
+    static let allowedValues: Set<String> = Set(allCases.map(\.rawValue))
+
+    static func normalized(from rawValue: String) -> ExtractionRelationshipType? {
+        let normalized = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+
+        switch normalized {
+        case "prerequisite of", "prerequisite", "requires", "required by", "depends on", "depends upon", "depend on":
+            return .dependsOn
+        case "part of", "contains", "includes", "component of", "member of":
+            return .partOf
+        case "example of", "for example", "example", "instance of":
+            return .exampleOf
+        case "causes", "cause", "leads to", "results in", "triggers", "produces":
+            return .causes
+        case "related to", "related", "associated with", "linked to":
+            return .relatedTo
+        default:
+            return ExtractionRelationshipType(rawValue: rawValue.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())
+        }
+    }
+
+    func bridgedRelationshipKind() -> KnowledgeRelationshipKind {
+        switch self {
+        case .prerequisiteOf, .dependsOn:
+            return .requires
+        case .partOf:
+            return .partOf
+        case .exampleOf:
+            return .exampleOf
+        case .causes:
+            return .causes
+        case .relatedTo:
+            return .relatedTo
+        }
+    }
+
+    func bridgedGraphRelationshipType() -> ConceptRelationshipType {
+        switch self {
+        case .prerequisiteOf:
+            return .prerequisite
+        case .partOf:
+            return .partOf
+        case .exampleOf:
+            return .exampleOf
+        case .causes:
+            return .causes
+        case .dependsOn:
+            return .dependsOn
+        case .relatedTo:
+            return .relatedTo
+        }
+    }
+}
+
+struct ExtractionSourceReference: Codable, Equatable, Sendable {
+    var chunkID: String
+    var documentID: String
+    var chunkIndex: Int
+    var startOffset: Int?
+    var endOffset: Int?
+}
+
+struct ExtractionConcept: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var descriptionText: String?
+    var importanceScore: Double
+    var confidenceScore: Double
+    var aliases: [String]
+    var sourceChunkIDs: [String]
+
+    init(
+        id: String,
+        name: String,
+        descriptionText: String? = nil,
+        importanceScore: Double = 0.5,
+        confidenceScore: Double = 0.5,
+        aliases: [String] = [],
+        sourceChunkIDs: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.descriptionText = descriptionText
+        self.importanceScore = importanceScore
+        self.confidenceScore = confidenceScore
+        self.aliases = aliases
+        self.sourceChunkIDs = sourceChunkIDs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case descriptionText = "description"
+        case importanceScore = "importance_score"
+        case confidenceScore = "confidence_score"
+        case aliases
+        case sourceChunkIDs = "source_chunk_ids"
+    }
+}
+
+struct ExtractionRelationship: Codable, Equatable, Sendable {
+    var sourceID: String
+    var targetID: String
+    var relationshipType: ExtractionRelationshipType
+    var confidenceScore: Double
+    var sourceChunkIDs: [String]
+
+    init(
+        sourceID: String,
+        targetID: String,
+        relationshipType: ExtractionRelationshipType,
+        confidenceScore: Double = 0.5,
+        sourceChunkIDs: [String] = []
+    ) {
+        self.sourceID = sourceID
+        self.targetID = targetID
+        self.relationshipType = relationshipType
+        self.confidenceScore = confidenceScore
+        self.sourceChunkIDs = sourceChunkIDs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sourceID = "source_id"
+        case targetID = "target_id"
+        case relationshipType = "relationship_type"
+        case confidenceScore = "confidence_score"
+        case sourceChunkIDs = "source_chunk_ids"
+    }
+}
+
+struct ExtractionFact: Codable, Equatable, Sendable {
+    var id: String
+    var statement: String
+    var confidenceScore: Double
+    var conceptIDs: [String]
+    var sourceChunkIDs: [String]
+
+    init(
+        id: String,
+        statement: String,
+        confidenceScore: Double = 0.5,
+        conceptIDs: [String] = [],
+        sourceChunkIDs: [String] = []
+    ) {
+        self.id = id
+        self.statement = statement
+        self.confidenceScore = confidenceScore
+        self.conceptIDs = conceptIDs
+        self.sourceChunkIDs = sourceChunkIDs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case statement
+        case confidenceScore = "confidence_score"
+        case conceptIDs = "concept_ids"
+        case sourceChunkIDs = "source_chunk_ids"
+    }
+}
+
+struct CanonicalExtractionPayload: Codable, Equatable, Sendable {
+    var concepts: [ExtractionConcept] = []
+    var facts: [ExtractionFact] = []
+    var relationships: [ExtractionRelationship] = []
+    var sourceReferences: [ExtractionSourceReference] = []
+
+    var isEmpty: Bool {
+        concepts.isEmpty && facts.isEmpty && relationships.isEmpty && sourceReferences.isEmpty
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case concepts
+        case facts
+        case relationships
+        case sourceReferences = "source_references"
+    }
+}
+
+struct ConceptResolver {
+    struct Resolution: Sendable {
+        var concepts: [ExtractionConcept]
+        var aliasToConceptID: [String: String]
+        var normalizedNameToConceptID: [String: String]
+    }
+
+    func resolve(_ concepts: [ExtractionConcept]) -> Resolution {
+        var canonicalConcepts: [ExtractionConcept] = []
+        var aliasToConceptID: [String: String] = [:]
+        var normalizedNameToConceptID: [String: String] = [:]
+
+        for concept in concepts {
+            let cleaned = sanitize(concept)
+            guard !cleaned.name.isEmpty else { continue }
+
+            let normalizedName = Self.normalizedKey(for: cleaned.name)
+            let normalizedAliases = cleaned.aliases.map { Self.normalizedKey(for: $0) }
+            let matchIndex = canonicalConcepts.firstIndex(where: { existing in
+                let existingKey = Self.normalizedKey(for: existing.name)
+                return existingKey == normalizedName
+                    || existing.aliases.map { Self.normalizedKey(for: $0) }.contains(normalizedName)
+                    || normalizedAliases.contains(existingKey)
+                    || existing.aliases.contains(where: { alias in
+                        normalizedAliases.contains(Self.normalizedKey(for: alias))
+                    })
+            })
+
+            if let matchIndex {
+                canonicalConcepts[matchIndex] = merge(canonicalConcepts[matchIndex], with: cleaned)
+            } else {
+                canonicalConcepts.append(cleaned)
+            }
+        }
+
+        for concept in canonicalConcepts {
+            let canonicalID = concept.id
+            let normalizedName = Self.normalizedKey(for: concept.name)
+            normalizedNameToConceptID[normalizedName] = canonicalID
+            aliasToConceptID[normalizedName] = canonicalID
+            for alias in concept.aliases {
+                aliasToConceptID[Self.normalizedKey(for: alias)] = canonicalID
+            }
+        }
+
+        return Resolution(
+            concepts: canonicalConcepts,
+            aliasToConceptID: aliasToConceptID,
+            normalizedNameToConceptID: normalizedNameToConceptID
+        )
+    }
+
+    private func sanitize(_ concept: ExtractionConcept) -> ExtractionConcept {
+        var concept = concept
+        concept.id = concept.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        concept.name = concept.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let description = concept.descriptionText?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
+            concept.descriptionText = description
+        } else {
+            concept.descriptionText = nil
+        }
+        concept.importanceScore = clamp(concept.importanceScore)
+        concept.confidenceScore = clamp(concept.confidenceScore)
+        concept.aliases = Self.dedupeStrings(concept.aliases)
+        concept.sourceChunkIDs = Self.dedupeStrings(concept.sourceChunkIDs)
+        if concept.id.isEmpty {
+            concept.id = deterministicID(for: concept.name)
+        }
+        return concept
+    }
+
+    private func merge(_ lhs: ExtractionConcept, with rhs: ExtractionConcept) -> ExtractionConcept {
+        var concept = lhs
+        if concept.id.isEmpty { concept.id = rhs.id }
+        if concept.name.isEmpty { concept.name = rhs.name }
+        if concept.descriptionText == nil || concept.descriptionText?.isEmpty == true {
+            concept.descriptionText = rhs.descriptionText
+        } else if let rhsDescription = rhs.descriptionText, !rhsDescription.isEmpty, rhsDescription.count > (concept.descriptionText?.count ?? 0) {
+            concept.descriptionText = rhsDescription
+        }
+        concept.importanceScore = max(concept.importanceScore, rhs.importanceScore)
+        concept.confidenceScore = max(concept.confidenceScore, rhs.confidenceScore)
+        concept.aliases = Self.dedupeStrings(concept.aliases + rhs.aliases + [rhs.name]).filter {
+            Self.normalizedKey(for: $0) != Self.normalizedKey(for: concept.name)
+        }
+        concept.sourceChunkIDs = Self.dedupeStrings(concept.sourceChunkIDs + rhs.sourceChunkIDs)
+        return concept
+    }
+
+    private func deterministicID(for name: String) -> String {
+        let normalized = Self.normalizedKey(for: name)
+        guard !normalized.isEmpty else { return UUID().uuidString }
+        return normalized.replacingOccurrences(of: " ", with: "-")
+    }
+
+    private func clamp(_ value: Double) -> Double {
+        min(1.0, max(0.0, value))
+    }
+
+    private static func dedupeStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = Self.normalizedKey(for: trimmed)
+            guard !trimmed.isEmpty, !key.isEmpty, !seen.contains(key) else { return nil }
+            seen.insert(key)
+            return trimmed
+        }
+    }
+
+    private static func normalizedKey(for value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+extension StructuredKnowledge {
+    func canonicalExtractionPayload(sourceReferences: [ExtractionSourceReference] = []) -> CanonicalExtractionPayload {
+        let canonicalSourceReferences = sourceReferences.isEmpty ? inferSourceReferences() : sourceReferences
+        let canonicalSourceIDs = Set(canonicalSourceReferences.map(\.chunkID))
+
+        let canonicalConcepts = concepts.map { concept in
+            ExtractionConcept(
+                id: concept.id,
+                name: concept.name,
+                descriptionText: concept.definition.isEmpty ? nil : concept.definition,
+                importanceScore: concept.importance,
+                confidenceScore: concept.confidence,
+                aliases: concept.aliases,
+                sourceChunkIDs: Self.dedupeStrings(concept.sourceLocations.map(\.sectionID).filter { canonicalSourceIDs.isEmpty || canonicalSourceIDs.contains($0) })
+            )
+        }
+
+        let canonicalRelationships: [ExtractionRelationship] = relationships.compactMap { relationship in
+            guard let type = ExtractionRelationshipType.normalized(from: relationship.relationKind.rawValue)
+                ?? ExtractionRelationshipType.normalized(from: relationship.relation) else { return nil }
+            return ExtractionRelationship(
+                sourceID: relationship.sourceID,
+                targetID: relationship.targetID,
+                relationshipType: type,
+                confidenceScore: relationship.confidence,
+                sourceChunkIDs: Self.dedupeStrings(relationship.sourceLocations.map(\.sectionID).filter { canonicalSourceIDs.isEmpty || canonicalSourceIDs.contains($0) })
+            )
+        }
+
+        let canonicalFacts = importantFacts.enumerated().map { index, fact in
+            let matchedConceptIDs = concepts.compactMap { concept -> String? in
+                let names = [concept.name] + concept.aliases
+                return names.contains(where: { fact.lowercased().contains($0.lowercased()) }) ? concept.id : nil
+            }
+            let sourceIDs = matchedConceptIDs.flatMap { conceptID in
+                concepts.first(where: { $0.id == conceptID })?.sourceLocations.map(\.sectionID) ?? []
+            }
+            let fallbackSourceIDs = sourceIDs.isEmpty ? sourceLocations.map(\.sectionID) : sourceIDs
+            return ExtractionFact(
+                id: "fact-\(index)-\(String(fact.lowercased().prefix(24)).replacingOccurrences(of: " ", with: "-"))",
+                statement: fact,
+                confidenceScore: confidence,
+                conceptIDs: Self.dedupeStrings(matchedConceptIDs),
+                sourceChunkIDs: Self.dedupeStrings(fallbackSourceIDs.filter { canonicalSourceIDs.isEmpty || canonicalSourceIDs.contains($0) })
+            )
+        }
+
+        return CanonicalExtractionPayload(
+            concepts: canonicalConcepts,
+            facts: canonicalFacts,
+            relationships: canonicalRelationships,
+            sourceReferences: canonicalSourceReferences
+        )
+    }
+
+    static func fromCanonicalExtraction(
+        _ payload: CanonicalExtractionPayload,
+        title: String,
+        sourceSignature: String,
+        sourceType: String = "note",
+        subject: String = "",
+        approximateTokenCount: Int = 0,
+        sectionCount: Int = 0,
+        difficulty: StudyKnowledgeDifficulty = .intermediate,
+        keywords: [String] = [],
+        summaryHighlights: [String] = [],
+        examFocus: [String] = [],
+        supportingEvidence: [String] = []
+    ) -> StructuredKnowledge {
+        let resolved = ConceptResolver().resolve(payload.concepts)
+        let conceptsByID = Dictionary(uniqueKeysWithValues: resolved.concepts.map { ($0.id, $0) })
+        let conceptsByNormalizedName = Dictionary(uniqueKeysWithValues: resolved.concepts.map { (Self.normalizedKey(for: $0.name), $0) })
+        let sourceReferencesByID = Dictionary(uniqueKeysWithValues: payload.sourceReferences.map { ($0.chunkID, $0) })
+
+        func sourceLocations(for chunkIDs: [String], title: String, snippet: String = "") -> [KnowledgeSourceLocation] {
+            Self.dedupeStrings(chunkIDs).enumerated().map { index, chunkID in
+                let reference = sourceReferencesByID[chunkID]
+                return KnowledgeSourceLocation(
+                    id: "src-\(chunkID)-\(index)",
+                    sectionID: chunkID,
+                    sectionTitle: reference?.documentID.isEmpty == false ? reference?.documentID ?? title : title,
+                    lineStart: reference.map { $0.chunkIndex + 1 } ?? (index + 1),
+                    lineEnd: reference.map { $0.chunkIndex + 1 } ?? (index + 1),
+                    order: reference?.chunkIndex ?? index,
+                    snippet: snippet
+                )
+            }
+        }
+
+        let legacyConcepts = resolved.concepts.map { concept in
+            KnowledgeConcept(
+                id: concept.id,
+                name: concept.name,
+                definition: concept.descriptionText ?? concept.name,
+                aliases: concept.aliases,
+                category: "concept",
+                section: sourceSignature,
+                source: concept.sourceChunkIDs.first ?? sourceSignature,
+                definitionEvidence: concept.descriptionText.map { [$0] } ?? [],
+                aliasEvidence: concept.aliases,
+                sourceExcerpt: concept.descriptionText ?? concept.name,
+                importance: concept.importanceScore,
+                difficulty: 0.5,
+                relationships: [],
+                examples: concept.descriptionText.map { [$0] } ?? [],
+                learningObjective: concept.descriptionText ?? concept.name,
+                confidence: concept.confidenceScore,
+                sourceLocations: sourceLocations(for: concept.sourceChunkIDs, title: concept.name, snippet: concept.descriptionText ?? concept.name)
+            )
+        }
+
+        let legacyConceptIDByName = Dictionary(uniqueKeysWithValues: legacyConcepts.map { (Self.normalizedKey(for: $0.name), $0.id) })
+        let legacyConceptNameByID = Dictionary(uniqueKeysWithValues: legacyConcepts.map { ($0.id, $0.name) })
+
+        let legacyRelationships = payload.relationships.compactMap { relationship -> KnowledgeRelationship? in
+            let sourceID = relationship.sourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let targetID = relationship.targetID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sourceID.isEmpty, !targetID.isEmpty else { return nil }
+
+            let sourceConcept = conceptsByID[sourceID] ?? conceptsByNormalizedName[Self.normalizedKey(for: sourceID)]
+            let targetConcept = conceptsByID[targetID] ?? conceptsByNormalizedName[Self.normalizedKey(for: targetID)]
+            let sourceLegacyID = sourceConcept.map { legacyConceptIDByName[Self.normalizedKey(for: $0.name)] ?? $0.id } ?? sourceID
+            let targetLegacyID = targetConcept.map { legacyConceptIDByName[Self.normalizedKey(for: $0.name)] ?? $0.id } ?? targetID
+
+            return KnowledgeRelationship(
+                id: "rel-\(sourceLegacyID)-\(targetLegacyID)-\(relationship.relationshipType.rawValue.lowercased())",
+                sourceID: sourceLegacyID,
+                targetID: targetLegacyID,
+                relationKind: relationship.relationshipType.bridgedRelationshipKind(),
+                relation: relationship.relationshipType.rawValue,
+                sourceLocations: sourceLocations(for: relationship.sourceChunkIDs, title: legacyConceptNameByID[sourceLegacyID] ?? sourceLegacyID),
+                confidence: relationship.confidenceScore
+            )
+        }
+
+        let factStatements = Self.dedupeStrings(payload.facts.map(\.statement))
+        let sectionLocations = payload.sourceReferences.map { reference in
+            KnowledgeSourceLocation(
+                id: "src-\(reference.chunkID)",
+                sectionID: reference.chunkID,
+                sectionTitle: reference.documentID,
+                lineStart: reference.chunkIndex + 1,
+                lineEnd: reference.chunkIndex + 1,
+                order: reference.chunkIndex,
+                snippet: ""
+            )
+        }
+
+        let sections: [KnowledgeSection] = sectionLocations.isEmpty ? [KnowledgeSection(
+            id: sourceSignature,
+            title: title,
+            kind: .custom,
+            order: 0,
+            content: supportingEvidence.joined(separator: "\n"),
+            children: [],
+            sourceLocations: []
+        )] : sectionLocations.enumerated().map { index, location in
+            KnowledgeSection(
+                id: location.sectionID,
+                title: location.sectionTitle.isEmpty ? title : location.sectionTitle,
+                kind: .custom,
+                order: index,
+                content: location.snippet,
+                children: [],
+                sourceLocations: [location]
+            )
+        }
+
+        return StructuredKnowledge(
+            metadata: KnowledgeMetadata(
+                noteID: sourceSignature,
+                title: title,
+                subject: subject,
+                sourceType: sourceType,
+                approximateTokenCount: approximateTokenCount,
+                sectionCount: sectionCount,
+                extractedAt: Date(),
+                modelName: "",
+                promptVersion: "",
+                appVersion: "",
+                gitCommit: "",
+                sourceSignature: sourceSignature
+            ),
+            title: title,
+            topics: Self.dedupeStrings(keywords + legacyConcepts.map(\.name)),
+            sections: sections,
+            concepts: legacyConcepts,
+            definitions: legacyConcepts.map { concept in
+                KnowledgeDefinition(
+                    id: concept.id,
+                    term: concept.name,
+                    definition: concept.definition,
+                    aliases: concept.aliases,
+                    sourceLocations: concept.sourceLocations,
+                    confidence: concept.confidence
+                )
+            },
+            examples: legacyConcepts.flatMap { concept in
+                concept.examples.map { example in
+                    KnowledgeExample(
+                        id: "\(concept.id)-example-\(String(example.lowercased().prefix(16)).replacingOccurrences(of: " ", with: "-"))",
+                        conceptID: concept.id,
+                        example: example,
+                        sourceLocations: concept.sourceLocations,
+                        confidence: concept.confidence
+                    )
+                }
+            },
+            processes: [],
+            relationships: legacyRelationships,
+            learningObjectives: legacyConcepts.compactMap { concept in
+                let objective = concept.learningObjective.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !objective.isEmpty else { return nil }
+                return KnowledgeObjective(
+                    id: concept.id,
+                    objective: objective,
+                    relatedConceptIDs: [concept.id],
+                    sourceLocations: concept.sourceLocations,
+                    confidence: concept.confidence
+                )
+            },
+            actionItems: [],
+            keywords: Self.dedupeStrings(keywords + legacyConcepts.flatMap { $0.aliases }),
+            confidence: legacyConcepts.map(\.confidence).reduce(0, +) / Double(max(legacyConcepts.count, 1)),
+            sourceLocations: sectionLocations,
+            difficulty: difficulty,
+            importance: legacyConcepts.map(\.importance).max() ?? 0.5,
+            aliases: Self.dedupeStrings(legacyConcepts.flatMap { $0.aliases }),
+            procedures: [],
+            formulas: [],
+            importantFacts: factStatements,
+            keyTerminology: Self.dedupeStrings(legacyConcepts.map(\.name) + keywords),
+            misconceptions: [],
+            prerequisites: [],
+            hierarchy: sections,
+            supportingEvidence: supportingEvidence,
+            summaryHighlights: summaryHighlights,
+            examFocus: examFocus
+        )
+    }
+
+    private func inferSourceReferences() -> [ExtractionSourceReference] {
+        let locations = sourceLocations
+            + concepts.flatMap(\.sourceLocations)
+            + definitions.flatMap(\.sourceLocations)
+            + relationships.flatMap(\.sourceLocations)
+        let uniqueChunkIDs = Self.dedupeStrings(locations.map(\.sectionID))
+        return uniqueChunkIDs.enumerated().map { index, chunkID in
+            ExtractionSourceReference(
+                chunkID: chunkID,
+                documentID: metadata.sourceSignature.isEmpty ? metadata.noteID : metadata.sourceSignature,
+                chunkIndex: index,
+                startOffset: nil,
+                endOffset: nil
+            )
+        }
+    }
+
+    private static func normalizedKey(for value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func dedupeStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = Self.normalizedKey(for: trimmed)
+            guard !trimmed.isEmpty, !key.isEmpty, !seen.contains(key) else { return nil }
+            seen.insert(key)
+            return trimmed
+        }
+    }
+}

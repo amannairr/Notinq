@@ -1,0 +1,7 @@
+[00:00] Professor: Today we discuss databases.
+[02:00] Professor: Key concepts include Database, Table, SQL, Index, Transaction, Normalization.
+[05:00] Professor: Table stored_in Database.
+[05:00] Professor: Index improves Query Performance.
+[05:00] Professor: Transaction maintains Consistency.
+[08:00] Professor: SQL is used to query relational databases.
+[08:00] Professor: Normalization reduces redundancy.

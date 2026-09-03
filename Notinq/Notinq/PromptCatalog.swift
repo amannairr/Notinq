@@ -279,7 +279,7 @@ enum PromptValidationSupport {
 
 enum PromptCatalog {
     static let entries: [PromptCatalogEntry] = [
-        PromptCatalogEntry(id: "knowledgeExtraction", version: "1.0.0", description: "Canonical structured extraction from raw notes.", supportedProviders: ["localLlama", "openAI", "anthropic", "gemini"], inputType: "PromptExtractionInput", outputType: "StructuredKnowledge", expectedLatency: "high", estimatedTokens: 900),
+        PromptCatalogEntry(id: "knowledgeExtraction", version: "1.0.0", description: "Canonical structured extraction from raw notes.", supportedProviders: ["localLlama", "openAI", "anthropic", "gemini"], inputType: "PromptExtractionInput", outputType: "CanonicalExtractionPayload", expectedLatency: "high", estimatedTokens: 900),
         PromptCatalogEntry(id: "summary", version: "1.0.0", description: "Faithful summary from structured knowledge.", supportedProviders: ["localLlama", "openAI", "anthropic", "gemini"], inputType: "PromptStructuredKnowledgeInput", outputType: "PromptSummaryOutput", expectedLatency: "medium", estimatedTokens: 420),
         PromptCatalogEntry(id: "flashcards", version: "1.0.0", description: "One-concept-per-card flashcards.", supportedProviders: ["localLlama", "openAI", "anthropic", "gemini"], inputType: "PromptStructuredKnowledgeInput", outputType: "PromptFlashcardDeck", expectedLatency: "medium", estimatedTokens: 520),
         PromptCatalogEntry(id: "multipleChoiceQuiz", version: "1.0.0", description: "Grounded multiple choice quiz items.", supportedProviders: ["localLlama", "openAI", "anthropic", "gemini"], inputType: "PromptStructuredKnowledgeInput", outputType: "PromptQuizSet", expectedLatency: "medium", estimatedTokens: 560),
@@ -298,28 +298,15 @@ enum PromptCatalog {
     ]
 
     static let knowledgeExtractionSchema = PromptSchemaDescriptor(
-        name: "StructuredKnowledge",
-        description: "Canonical structured knowledge extraction payload.",
-        requiredFields: ["metadata", "title", "sections", "concepts", "relationships", "confidence"],
+        name: "CanonicalExtractionPayload",
+        description: "Canonical structured extraction payload.",
+        requiredFields: ["concepts", "facts", "relationships", "source_references"],
         jsonSchema: """
         {
-          "metadata": {"noteID":"string","title":"string","subject":"string","sourceType":"string","approximateTokenCount":"number","sectionCount":"number","sourceSignature":"string"},
-          "title": "string",
-          "topics": ["string"],
-          "sections": [{"id":"string","title":"string","kind":"string","order":"number","content":"string","children":[],"sourceLocations":[]}],
-          "concepts": [{"id":"string","name":"string","definition":"string","aliases":["string"],"category":"string","importance":"number","difficulty":"number","relationships":["string"],"examples":["string"],"learningObjective":"string","confidence":"number","sourceLocations":[]}],
-          "definitions": [{"id":"string","term":"string","definition":"string","aliases":["string"],"sourceLocations":[],"confidence":"number"}],
-          "examples": [{"id":"string","conceptID":"string","example":"string","sourceLocations":[],"confidence":"number"}],
-          "processes": [{"id":"string","title":"string","steps":["string"],"sourceLocations":[],"confidence":"number"}],
-          "relationships": [{"id":"string","sourceID":"string","targetID":"string","relation":"string","sourceLocations":[],"confidence":"number"}],
-          "learningObjectives": [{"id":"string","objective":"string","relatedConceptIDs":["string"],"sourceLocations":[],"confidence":"number"}],
-          "actionItems": [{"id":"string","title":"string","details":"string","priority":"string","sourceLocations":[],"confidence":"number"}],
-          "keywords": ["string"],
-          "confidence": "number",
-          "sourceLocations": [],
-          "difficulty": "string",
-          "importance": "number",
-          "aliases": ["string"]
+          "concepts": [{"id":"string","name":"string","description":"string","importance_score":"number","confidence_score":"number","aliases":["string"],"source_chunk_ids":["string"]}],
+          "facts": [{"id":"string","statement":"string","confidence_score":"number","concept_ids":["string"],"source_chunk_ids":["string"]}],
+          "relationships": [{"source_id":"string","target_id":"string","relationship_type":"string","confidence_score":"number","source_chunk_ids":["string"]}],
+          "source_references": [{"chunk_id":"string","document_id":"string","chunk_index":"number","start_offset":"number","end_offset":"number"}]
         }
         """
     )
@@ -432,13 +419,14 @@ struct KnowledgeExtractionPrompt: PromptDefinition {
         """
         return PromptBuilder.buildDocument(
             role: "You are a deterministic extraction engine for study notes.",
-            task: "Return canonical structured knowledge grounded only in the note.",
+            task: "Return canonical extraction data grounded only in the note.",
             rules: [
                 "Extract only explicit information present in the note.",
                 "Do not summarize, infer, expand, or explain.",
                 "Preserve source order exactly as it appears in the note.",
                 "Use conservative confidence scores.",
-                "Leave unsupported fields empty."
+                "Leave unsupported fields empty.",
+                "Return only concepts, facts, relationships, and source references."
             ],
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
@@ -448,9 +436,9 @@ struct KnowledgeExtractionPrompt: PromptDefinition {
                 "Do not reorder the extracted sections."
             ],
             validationRules: [
-                "Every concept needs an identifier, name, and confidence.",
-                "Every relationship needs valid source and target identifiers.",
-                "Duplicate concepts and duplicate definitions must be removed."
+                "Every concept needs an identifier, name, confidence, importance, and source chunk ids.",
+                "Every fact needs an identifier, statement, confidence, and source chunk ids.",
+                "Every relationship needs a normalized allowed relationship type and valid source and target identifiers."
             ],
             body: body,
             temperature: defaultTemperature,
@@ -460,28 +448,27 @@ struct KnowledgeExtractionPrompt: PromptDefinition {
             metadata: [
                 "prompt": identifier.rawValue,
                 "inputType": String(reflecting: PromptExtractionInput.self),
-                "outputType": String(reflecting: StructuredKnowledge.self)
+                "outputType": String(reflecting: CanonicalExtractionPayload.self)
             ]
         )
     }
 
-    static func validate(output: StructuredKnowledge, input: PromptExtractionInput, context: PromptBuildContext) -> PromptValidationReport {
-        let conceptNames = output.concepts.map(\.name)
+    static func validate(output: CanonicalExtractionPayload, input: PromptExtractionInput, context: PromptBuildContext) -> PromptValidationReport {
+        let report = ExtractionValidator.validate(payload: output)
         let required: [String: String] = [
-            "metadata": output.metadata.title.isEmpty ? "" : "ok",
-            "title": output.title,
-            "sections": output.sections.isEmpty ? "" : "ok",
             "concepts": output.concepts.isEmpty ? "" : "ok",
+            "facts": output.facts.isEmpty ? "" : "ok",
             "relationships": output.relationships.isEmpty ? "" : "ok",
-            "confidence": output.confidence > 0 ? "ok" : ""
+            "source_references": output.sourceReferences.isEmpty ? "" : "ok"
         ]
         var issues = PromptValidatorEngine.validateRequiredFields(required, required: outputSchema.requiredFields)
-        issues += PromptValidatorEngine.validateDuplicates(conceptNames, field: "concept")
-        issues += PromptValidatorEngine.validateConfidence(output.concepts.map(\.confidence), minimum: confidenceRequirement, field: "confidence")
+        issues += report.issues.map {
+            PromptValidationIssue(field: $0.field, message: $0.message, severity: $0.severity == .error ? .error : .warning)
+        }
         return PromptValidationReport(
-            isValid: !issues.contains(where: { $0.severity == .error }),
+            isValid: report.isValid && !issues.contains(where: { $0.severity == .error }),
             shouldRetry: !issues.isEmpty,
-            confidence: output.confidence,
+            confidence: output.concepts.map(\.confidenceScore).min() ?? 0.5,
             issues: issues
         )
     }

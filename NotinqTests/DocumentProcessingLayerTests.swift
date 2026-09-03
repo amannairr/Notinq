@@ -229,7 +229,7 @@ final class TokenEstimatorTests: XCTestCase {
         let blocks = (0..<12).map { index in
             paragraphBlock(String(repeating: "Section \(index) ", count: 20), line: index)
         }
-        let sections = [makeSection(id: "section-1", title: "Body", level: 0, blockIDs: blocks.map(\.id))]
+        let sections = [makeSection(title: "Body", level: 0, blockIDs: blocks.map(\.id))]
         let document = ProcessedDocument(title: "Long", originalText: "", normalizedText: "", lines: [], contentHash: "long")
 
         let estimate = TokenEstimator.shared.estimate(document: document, blocks: blocks, sections: sections, targetChunkSize: 60)
@@ -239,7 +239,7 @@ final class TokenEstimatorTests: XCTestCase {
 
     func testSectionThatExceedsTargetStillGetsBoundaries() {
         let block = paragraphBlock(String(repeating: "Important concept ", count: 80), line: 0)
-        let section = makeSection(id: "section-1", title: "Massive", level: 0, blockIDs: [block.id])
+        let section = makeSection(title: "Massive", level: 0, blockIDs: [block.id])
         let document = ProcessedDocument(title: "Huge", originalText: "", normalizedText: "", lines: [], contentHash: "huge")
 
         let estimate = TokenEstimator.shared.estimate(document: document, blocks: [block], sections: [section], targetChunkSize: 20)
@@ -351,6 +351,50 @@ final class DocumentStructureCacheTests: XCTestCase {
 }
 
 final class DocumentProcessingPipelineTests: XCTestCase {
+    func testProcessingIsDeterministic() throws {
+        let text = """
+        # Introduction
+
+        Neural networks learn from data.
+
+        - Training
+        - Evaluation
+        """
+
+        let first = try DocumentProcessingPipeline.shared.process(title: "Test", text: text)
+        let second = try DocumentProcessingPipeline.shared.process(title: "Test", text: text)
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.blocks.map(\.id), second.blocks.map(\.id))
+        XCTAssertEqual(first.sections.map(\.id), second.sections.map(\.id))
+        XCTAssertEqual(first.blocks.map(\.sectionID), second.blocks.map(\.sectionID))
+    }
+
+    func testDuplicateSectionTitlesProduceDistinctIDs() throws {
+        let structure = try DocumentProcessingPipeline.shared.process(
+            title: "Outline",
+            text: """
+            # Introduction
+            First content.
+
+            # Introduction
+            Second content.
+            """
+        )
+
+        let introductions = structure.sections.filter { $0.title == "Introduction" }
+
+        XCTAssertEqual(introductions.count, 2)
+        XCTAssertNotEqual(introductions[0].id, introductions[1].id)
+    }
+
+    func testDifferentBlockRangesProduceDifferentIDs() {
+        let first = paragraphBlock("Alpha", startLine: 0, endLine: 0)
+        let second = paragraphBlock("Alpha", startLine: 1, endLine: 1)
+
+        XCTAssertNotEqual(first.id, second.id)
+    }
+
     func testRawInputProducesExpectedDocumentStructure() throws {
         let structure = try DocumentProcessingPipeline.shared.process(
             title: "Biology",
@@ -428,7 +472,7 @@ final class DocumentProcessingBoundaryIntegrationTests: XCTestCase {
 
 private func headingBlock(_ title: String, level: Int, line: Int) -> DocumentBlock {
     DocumentBlock(
-        id: UUID().uuidString,
+        id: blockID(kind: .heading, startLine: line, endLine: line),
         kind: .heading,
         content: title,
         normalizedContent: title,
@@ -446,13 +490,17 @@ private func headingBlock(_ title: String, level: Int, line: Int) -> DocumentBlo
 }
 
 private func paragraphBlock(_ text: String, line: Int) -> DocumentBlock {
+    paragraphBlock(text, startLine: line, endLine: line)
+}
+
+private func paragraphBlock(_ text: String, startLine: Int, endLine: Int) -> DocumentBlock {
     DocumentBlock(
-        id: UUID().uuidString,
+        id: blockID(kind: .paragraph, startLine: startLine, endLine: endLine),
         kind: .paragraph,
         content: text,
         normalizedContent: text,
-        startLine: line,
-        endLine: line,
+        startLine: startLine,
+        endLine: endLine,
         headingLevel: nil,
         listStyle: nil,
         listItems: [],
@@ -464,9 +512,9 @@ private func paragraphBlock(_ text: String, line: Int) -> DocumentBlock {
     )
 }
 
-private func makeSection(id: String, title: String, level: Int, blockIDs: [String]) -> DocumentSection {
+private func makeSection(title: String, level: Int, order: Int = 0, blockIDs: [String]) -> DocumentSection {
     DocumentSection(
-        id: id,
+        id: sectionID(level: level, order: order, title: title),
         kind: .paragraph,
         title: title,
         content: title,
@@ -474,7 +522,7 @@ private func makeSection(id: String, title: String, level: Int, blockIDs: [Strin
         parentID: nil,
         childIDs: [],
         blockIDs: blockIDs,
-        order: 0,
+        order: order,
         startLine: 0,
         endLine: max(0, blockIDs.count - 1)
     )
@@ -482,7 +530,7 @@ private func makeSection(id: String, title: String, level: Int, blockIDs: [Strin
 
 private func makeCachedStructure(hash: String) -> DocumentStructure {
     let block = paragraphBlock("Cached content.", line: 0)
-    let section = makeSection(id: "section-1", title: "Cached", level: 0, blockIDs: [block.id])
+    let section = makeSection(title: "Cached", level: 0, blockIDs: [block.id])
     return DocumentStructure(
         title: "Cached",
         originalText: "Cached content.",
@@ -506,7 +554,7 @@ private func makeCachedStructure(hash: String) -> DocumentStructure {
 private func makeTokenTestStructure(text: String) -> (document: ProcessedDocument, blocks: [DocumentBlock], sections: [DocumentSection]) {
     let document = ProcessedDocument(title: "Token", originalText: text, normalizedText: text, lines: [text], contentHash: "token")
     let block = paragraphBlock(text, line: 0)
-    let section = makeSection(id: "section-1", title: "Body", level: 0, blockIDs: [block.id])
+    let section = makeSection(title: "Body", level: 0, blockIDs: [block.id])
     return (document, [block], [section])
 }
 
@@ -529,7 +577,7 @@ private final class PipelineRecorder: DocumentProcessingNormalizing, StructureDe
 
     func split(title: String, blocks: [DocumentBlock]) -> DocumentSectionSplitResult {
         events.append("splitter")
-        let section = makeSection(id: "section-1", title: title, level: 0, blockIDs: blocks.map(\.id))
+        let section = makeSection(title: title, level: 0, blockIDs: blocks.map(\.id))
         let mappedBlocks = blocks.map { block in
             var block = block
             block.sectionID = section.id
@@ -552,9 +600,9 @@ private final class PipelineRecorder: DocumentProcessingNormalizing, StructureDe
             equationCount: statistics.equationCount,
             tableCount: statistics.tableCount,
             sentenceCount: statistics.sentenceCount,
+            averageSentenceLength: 1,
             complexityScore: 0.25,
             sectionCount: sections.count,
-            averageSentenceLength: 1,
             sectionMetrics: []
         )
     }
@@ -590,6 +638,18 @@ private final class PipelineRecorder: DocumentProcessingNormalizing, StructureDe
 
     func removeStructure(for contentHash: String) {}
     func clear() {}
+}
+
+private func blockID(kind: DocumentBlockKind, startLine: Int, endLine: Int) -> String {
+    "\(kind.rawValue)-\(startLine)-\(endLine)"
+}
+
+private func sectionID(level: Int, order: Int, title: String) -> String {
+    let normalizedTitle = title
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .replacingOccurrences(of: #"\s+"#, with: "-", options: .regularExpression)
+    return "section-\(level)-\(order)-\(normalizedTitle)"
 }
 
 private final class FailingProcessor: DocumentProcessingNormalizing {

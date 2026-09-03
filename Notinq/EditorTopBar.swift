@@ -69,29 +69,15 @@ struct EditorTopBar: View {
                 horizontalOffset: toolbarScrollOffset
             )
 
-            Group {
-                if proxy.size.width < 1360 {
-                    VStack(alignment: .leading, spacing: 10) {
-                        toolbarStrip(
-                            showLeadingCue: showLeadingCue,
-                            showTrailingCue: showTrailingCue
-                        )
+            HStack(spacing: 0) {
+                toolbarStrip(
+                    showLeadingCue: showLeadingCue,
+                    showTrailingCue: showTrailingCue
+                )
 
-                        compactActionControls
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    HStack(spacing: 0) {
-                        toolbarStrip(
-                            showLeadingCue: showLeadingCue,
-                            showTrailingCue: showTrailingCue
-                        )
-
-                        alwaysVisibleActionControls
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                alwaysVisibleActionControls
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 22)
             .padding(.vertical, 11)
             .background(.ultraThinMaterial)
@@ -133,135 +119,6 @@ struct EditorTopBar: View {
             overflowButtonSlot(edge: .trailing, isVisible: showTrailingCue)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private var compactActionControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Button(action: onGenerateStudyMaterials) {
-                    HStack(spacing: 7) {
-                        if isGeneratingStudyMaterials {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "book.pages")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        Text(isGeneratingStudyMaterials ? "Generating..." : "Generate Study Materials")
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(canGenerateStudyMaterials ? Color.white : Color.textTertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        Group {
-                            if canGenerateStudyMaterials {
-                                LinearGradient(
-                                    colors: [
-                                        Color(red: 0.24, green: 0.49, blue: 0.59),
-                                        Color(red: 0.30, green: 0.62, blue: 0.53)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            } else {
-                                Color.hoverWarm
-                            }
-                        }
-                    )
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(isGeneratingStudyMaterials)
-                .toolbarTooltip("Generate Study Materials")
-
-                Button(action: onAnalyzeLecture) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text("Open Learning Insights")
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(Color.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.16, green: 0.49, blue: 0.86),
-                                Color(red: 0.27, green: 0.62, blue: 0.92)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(!canGenerateStudyMaterials)
-                .toolbarTooltip("Open Learning Insights")
-            }
-
-            HStack(spacing: 8) {
-                Button(action: onUpdateKnowledgeGraph) {
-                    HStack(spacing: 7) {
-                        if isKnowledgeGraphGenerating {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "circle.grid.2x2")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        Text(isKnowledgeGraphGenerating ? "Updating..." : "Update Graph")
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(canUpdateKnowledgeGraph ? Color.white : Color.textTertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        Group {
-                            if canUpdateKnowledgeGraph {
-                                LinearGradient(
-                                    colors: [
-                                        Color(red: 0.27, green: 0.43, blue: 0.55),
-                                        Color(red: 0.34, green: 0.56, blue: 0.68)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            } else {
-                                Color.hoverWarm
-                            }
-                        }
-                    )
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(isKnowledgeGraphGenerating || !canUpdateKnowledgeGraph)
-                .toolbarTooltip("Update Knowledge Graph")
-
-                ToolbarButton(icon: "sparkles", label: "Ask AI") {
-                    onAskAI()
-                }
-
-                ToolbarToggleButton(
-                    icon: isMicActive ? "mic.fill" : "mic",
-                    isActive: isMicActive,
-                    label: isMicActive ? "Stop Dictation" : "Start Dictation"
-                ) {
-                    if isMicActive {
-                        bridge?.stopLiveTranscription()
-                        isMicActive = false
-                    } else {
-                        isMicActive = bridge?.startLiveTranscription(modelPath: "Models/ggml-base.en.bin") ?? false
-                    }
-                }
-            }
-        }
     }
 
     @ViewBuilder

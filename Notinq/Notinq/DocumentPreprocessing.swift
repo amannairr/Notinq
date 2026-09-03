@@ -14,7 +14,7 @@ enum DocumentSectionKind: String, Codable, CaseIterable, Sendable {
 }
 
 struct DocumentSection: Identifiable, Codable, Equatable, Sendable {
-    var id: String = UUID().uuidString
+    var id: String
     var kind: DocumentSectionKind
     var title: String = ""
     var content: String
@@ -82,11 +82,12 @@ final class DocumentPreprocessor {
                 currentLines.removeAll()
                 return
             }
-            sections.append(
-                DocumentSection(
-                    kind: currentKind,
-                    title: currentTitle,
-                    content: content,
+                sections.append(
+                    DocumentSection(
+                        id: sectionID(level: currentLevel, order: sections.count, title: currentTitle),
+                        kind: currentKind,
+                        title: currentTitle,
+                        content: content,
                     level: currentLevel,
                     startLine: max(0, currentStart),
                     endLine: max(currentStart, endLine)
@@ -288,5 +289,13 @@ final class DocumentPreprocessor {
 
     func signature(for title: String, text: String) -> String {
         DocumentProcessor.shared.normalize(title: title, text: text).contentHash
+    }
+
+    private func sectionID(level: Int, order: Int, title: String) -> String {
+        let normalizedTitle = title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: "-", options: .regularExpression)
+        return "section-\(level)-\(order)-\(normalizedTitle)"
     }
 }
