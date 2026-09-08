@@ -93,6 +93,18 @@ final class AIService {
 
     private let inferenceEngine = InferenceEngine.shared
 
+    struct CitedTutorResponse {
+        let response: PromptTutorResponse
+        let context: KnowledgeContext
+
+        var citations: [PromptTutorCitation] {
+            if let responseCitations = response.citations, responseCitations.isEmpty == false {
+                return responseCitations
+            }
+            return context.tutorContext.citations.map { $0.asTutorCitation }
+        }
+    }
+
     func run(prompt: String, contextLength: Int, completion: @escaping (String) -> Void) {
         run(prompt: prompt, contextLength: contextLength, kind: .ask, completion: completion)
     }
@@ -204,10 +216,11 @@ final class AIService {
     }
 
     func chat(noteTitle: String, noteText: String, userRequest: String, completion: @escaping (String) -> Void) {
+        let knowledgeContext = KnowledgeService.shared.buildContext(noteID: nil, title: noteTitle, text: noteText)
         let promptContext = AIPromptContext(
             noteTitle: noteTitle,
             noteText: noteText,
-            knowledgeJSON: nil,
+            knowledgeJSON: knowledgeContext.knowledgeJSON,
             selectedText: nil,
             userRequest: userRequest
         )
@@ -217,6 +230,51 @@ final class AIService {
             let response = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
             await MainActor.run {
                 completion(response)
+            }
+        }
+    }
+
+    func citedTutorResponse(
+        noteID: UUID?,
+        noteTitle: String,
+        noteText: String,
+        userRequest: String,
+        completion: @escaping (CitedTutorResponse) -> Void
+    ) {
+        let knowledgeContext = KnowledgeService.shared.buildContext(noteID: noteID, title: noteTitle, text: noteText)
+        let snapshot = knowledgeContext.studySnapshotRepresentation()
+        let promptContext = PromptBuildContext(
+            noteTitle: noteTitle,
+            noteText: truncate(noteText, limit: 4_000),
+            structuredKnowledge: snapshot.structuredKnowledgeRepresentation(),
+            knowledgeSnapshot: snapshot,
+            tutorContext: knowledgeContext.tutorContext,
+            selectedText: nil,
+            userRequest: userRequest,
+            providerKind: ModelManager.shared.currentModelDiagnostics().providerKind,
+            modelIdentifier: ModelManager.shared.activeModelIDDescription(),
+            noteSignature: noteID?.uuidString,
+            contextLimit: Int(AIRuntimeConfig.current.llama.contextSize)
+        )
+        let input = PromptTutorInput(noteTitle: noteTitle, knowledge: snapshot, question: userRequest)
+
+        Task {
+            do {
+                let execution = try await PromptRegistry.shared.execute(TutorPrompt.self, input: input, context: promptContext)
+                await MainActor.run {
+                    completion(CitedTutorResponse(response: execution.output, context: knowledgeContext))
+                }
+            } catch {
+                chat(noteTitle: noteTitle, noteText: noteText, userRequest: userRequest) { responseText in
+                    let fallback = PromptTutorResponse(
+                        answer: responseText,
+                        keyPoints: [],
+                        followUpQuestions: [],
+                        confidence: 0.5,
+                        citations: nil
+                    )
+                    completion(CitedTutorResponse(response: fallback, context: knowledgeContext))
+                }
             }
         }
     }
@@ -275,6 +333,11 @@ final class AIService {
         let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
         return await generateStudyData(from: structure, notebookText: notebookText, existingStudyData: NoteStudyData())
     }
+
+    private func truncate(_ text: String, limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit)) + "\n[Context truncated]"
+    }
 }
 
 private extension AIAction {
@@ -293,5 +356,17 @@ private extension AIAction {
         case .ask:
             return "Answer the user's question using the note context."
         }
+    }
+}
+
+private extension CitationReference {
+    var asTutorCitation: PromptTutorCitation {
+        PromptTutorCitation(
+            sourceType: sourceType.rawValue,
+            sourceID: sourceID,
+            noteTitle: noteTitle,
+            conceptName: conceptName,
+            snippet: snippet
+        )
     }
 }

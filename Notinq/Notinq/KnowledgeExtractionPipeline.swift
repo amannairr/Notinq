@@ -549,7 +549,10 @@ final class KnowledgeExtractionEngine {
                     examFocus: heuristic.examFocus,
                     supportingEvidence: heuristic.supportingEvidence
                 )
-                merged = merge(payload: KnowledgeValidator.normalize(payload: legacyPayload), with: heuristic)
+                merged = mergeChunkKnowledge(
+                    normalizedHeuristicLegacy,
+                    with: KnowledgeValidator.normalize(payload: legacyPayload)
+                )
 
                 if !validation.isValid {
                     let retryRequest = AIGenerationRequest(
@@ -582,7 +585,10 @@ final class KnowledgeExtractionEngine {
                                 examFocus: heuristic.examFocus,
                                 supportingEvidence: heuristic.supportingEvidence
                             )
-                            merged = merge(payload: KnowledgeValidator.normalize(payload: retryLegacy), with: heuristic)
+                            merged = mergeChunkKnowledge(
+                                normalizedHeuristicLegacy,
+                                with: KnowledgeValidator.normalize(payload: retryLegacy)
+                            )
                             retryCount += 1
                         }
                         latency += retryResponse.metrics?.generationTime ?? 0
@@ -594,7 +600,7 @@ final class KnowledgeExtractionEngine {
                 if let data = parsedJSON.data(using: .utf8),
                    let legacyPayload = try? JSONDecoder().decode(StructuredKnowledge.self, from: data) {
                     let normalizedLegacy = KnowledgeValidator.normalize(payload: legacyPayload)
-                    merged = merge(payload: normalizedLegacy, with: heuristic)
+                    merged = mergeChunkKnowledge(normalizedHeuristicLegacy, with: normalizedLegacy)
                 }
             }
         } catch {
@@ -1030,6 +1036,9 @@ final class KnowledgeExtractionEngine {
 
         let processes = extractProcessRecords(sentences: sentences, sections: sections)
         let relationships = buildRelationships(concepts: concepts, sentences: sentences, sourceSignature: sourceSignature)
+        let finalRelationships = relationships.isEmpty
+            ? fallbackRelationships(concepts: concepts, sentences: sentences, sourceSignature: sourceSignature)
+            : relationships
         let learningObjectives = concepts.compactMap { concept -> KnowledgeObjective? in
             guard !concept.learningObjective.isEmpty else { return nil }
             return KnowledgeObjective(
@@ -1069,7 +1078,7 @@ final class KnowledgeExtractionEngine {
             definitions: definitions,
             examples: examples,
             processes: processes,
-            relationships: relationships,
+            relationships: finalRelationships,
             learningObjectives: learningObjectives,
             actionItems: actionItems,
             keywords: keywords,
@@ -1089,38 +1098,6 @@ final class KnowledgeExtractionEngine {
             summaryHighlights: summaryHighlights,
             examFocus: examFocus
         )
-    }
-
-    private func merge(payload: StructuredKnowledge, with fallback: StructuredKnowledge) -> StructuredKnowledge {
-        var merged = fallback
-        merged.metadata = merge(metadata: fallback.metadata, with: payload.metadata)
-        merged.title = payload.title.isEmpty ? fallback.title : payload.title
-        merged.topics = payload.topics.isEmpty ? fallback.topics : payload.topics
-        merged.sections = payload.sections.isEmpty ? fallback.sections : payload.sections
-        merged.concepts = payload.concepts.isEmpty ? fallback.concepts : payload.concepts
-        merged.definitions = payload.definitions.isEmpty ? fallback.definitions : payload.definitions
-        merged.examples = payload.examples.isEmpty ? fallback.examples : payload.examples
-        merged.processes = payload.processes.isEmpty ? fallback.processes : payload.processes
-        merged.relationships = payload.relationships.isEmpty ? fallback.relationships : payload.relationships
-        merged.learningObjectives = payload.learningObjectives.isEmpty ? fallback.learningObjectives : payload.learningObjectives
-        merged.actionItems = payload.actionItems.isEmpty ? fallback.actionItems : payload.actionItems
-        merged.keywords = payload.keywords.isEmpty ? fallback.keywords : payload.keywords
-        merged.confidence = payload.confidence == 0 ? fallback.confidence : payload.confidence
-        merged.sourceLocations = payload.sourceLocations.isEmpty ? fallback.sourceLocations : payload.sourceLocations
-        merged.difficulty = payload.difficulty
-        merged.importance = payload.importance == 0 ? fallback.importance : payload.importance
-        merged.aliases = payload.aliases.isEmpty ? fallback.aliases : payload.aliases
-        merged.procedures = payload.procedures.isEmpty ? fallback.procedures : payload.procedures
-        merged.formulas = payload.formulas.isEmpty ? fallback.formulas : payload.formulas
-        merged.importantFacts = payload.importantFacts.isEmpty ? fallback.importantFacts : payload.importantFacts
-        merged.keyTerminology = payload.keyTerminology.isEmpty ? fallback.keyTerminology : payload.keyTerminology
-        merged.misconceptions = payload.misconceptions.isEmpty ? fallback.misconceptions : payload.misconceptions
-        merged.prerequisites = payload.prerequisites.isEmpty ? fallback.prerequisites : payload.prerequisites
-        merged.hierarchy = payload.hierarchy.isEmpty ? fallback.hierarchy : payload.hierarchy
-        merged.supportingEvidence = payload.supportingEvidence.isEmpty ? fallback.supportingEvidence : payload.supportingEvidence
-        merged.summaryHighlights = payload.summaryHighlights.isEmpty ? fallback.summaryHighlights : payload.summaryHighlights
-        merged.examFocus = payload.examFocus.isEmpty ? fallback.examFocus : payload.examFocus
-        return merged
     }
 
     private func merge(metadata fallback: KnowledgeMetadata, with payload: KnowledgeMetadata) -> KnowledgeMetadata {
@@ -1220,6 +1197,39 @@ final class KnowledgeExtractionEngine {
             )
         }
         return relationships
+    }
+
+    private func fallbackRelationships(concepts: [KnowledgeConcept], sentences: [String], sourceSignature: String) -> [KnowledgeRelationship] {
+        guard concepts.count >= 2 else { return [] }
+
+        let ordered = concepts.sorted { lhs, rhs in
+            if lhs.importance == rhs.importance {
+                return lhs.name < rhs.name
+            }
+            return lhs.importance > rhs.importance
+        }
+
+        guard let source = ordered.first, let target = ordered.dropFirst().first else { return [] }
+        let snippet = sentences.first ?? "\(source.name) \(target.name)"
+        return [
+            KnowledgeRelationship(
+                sourceID: source.id,
+                targetID: target.id,
+                relationKind: .relatedTo,
+                relation: KnowledgeRelationshipKind.relatedTo.rawValue,
+                sourceLocations: [
+                    KnowledgeSourceLocation(
+                        sectionID: sourceSignature,
+                        sectionTitle: source.name,
+                        lineStart: 1,
+                        lineEnd: 1,
+                        order: 0,
+                        snippet: snippet
+                    )
+                ],
+                confidence: 0.35
+            )
+        ]
     }
 
     private func confidence(for concept: String, sentences: [String], definitionText: String, aliasEvidence: [String]) -> Double {

@@ -277,7 +277,7 @@ final class StructureDetector: StructureDetecting {
             let numericPrefix = String(line[..<numberRange.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             let level = max(1, numericPrefix.split(separator: ".").count)
             let title = String(line[numberRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty else { return nil }
+            guard !title.isEmpty, title.first?.isUppercase == true else { return nil }
             return (level, title)
         }
 

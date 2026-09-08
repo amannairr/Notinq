@@ -256,6 +256,39 @@ struct SearchView: View {
         selectedNoteID: UUID?
     ) -> [SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedNoteID = currentNoteOnly ? selectedNoteID : nil
+        let results = SearchService.shared.search(
+            SearchRequest(
+                query: trimmed,
+                currentNoteID: requestedNoteID,
+                folders: folders
+            )
+        )
+
+        if results.isEmpty, trimmed.isEmpty == false {
+            return legacySearchResults(
+                query: trimmed,
+                folders: folders,
+                currentNoteOnly: currentNoteOnly,
+                selectedNoteID: selectedNoteID
+            )
+        }
+
+        return results
+            .sorted {
+                if $0.relevance != $1.relevance {
+                    return $0.relevance > $1.relevance
+                }
+                return $0.updatedAt > $1.updatedAt
+            }
+    }
+
+    private static func legacySearchResults(
+        query: String,
+        folders: [NoteFolder],
+        currentNoteOnly: Bool,
+        selectedNoteID: UUID?
+    ) -> [SearchResult] {
         let candidateNotes: [(folder: NoteFolder, note: NoteFile)] = folders.flatMap { folder in
             folder.notes.map { (folder: folder, note: $0) }
         }
@@ -264,31 +297,21 @@ struct SearchView: View {
             ? candidateNotes.filter { $0.note.id == selectedNoteID }
             : candidateNotes
 
-        guard !scopedNotes.isEmpty else { return [] }
-
-        if trimmed.isEmpty {
-            return scopedNotes
-                .sorted { $0.note.updatedAt > $1.note.updatedAt }
-                .prefix(12)
-                .compactMap { SearchResult(folder: $0.folder, note: $0.note, query: trimmed) }
-        }
-
-        let terms = trimmed
+        let terms = query
             .lowercased()
             .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
             .map(String.init)
             .filter { !$0.isEmpty }
 
-        return scopedNotes
-            .compactMap { SearchResult(folder: $0.folder, note: $0.note, query: trimmed, terms: terms) }
-            .sorted { lhs, rhs in
-                if lhs.relevance != rhs.relevance {
-                    return lhs.relevance > rhs.relevance
-                }
-                return lhs.updatedAt > rhs.updatedAt
+        return scopedNotes.compactMap { folder, note in
+            SearchResult(folder: folder, note: note, query: query, terms: terms)
+        }
+        .sorted {
+            if $0.relevance != $1.relevance {
+                return $0.relevance > $1.relevance
             }
-            .prefix(24)
-            .map { $0 }
+            return $0.updatedAt > $1.updatedAt
+        }
     }
 
     static func selectedResultIndex(
@@ -313,9 +336,18 @@ struct SearchView: View {
 struct SearchResult: Identifiable, Equatable {
     enum SourceKind: String {
         case note = "Note"
+        case chunk = "Chunk"
+        case concept = "Concept"
 
         var iconName: String {
-            "note.text"
+            switch self {
+            case .note:
+                return "note.text"
+            case .chunk:
+                return "text.alignleft"
+            case .concept:
+                return "brain.head.profile"
+            }
         }
     }
 
@@ -324,10 +356,35 @@ struct SearchResult: Identifiable, Equatable {
     let title: String
     let folderTitle: String
     let sourceKind: SourceKind
+    let folderID: UUID?
+    let chunkID: String?
+    let conceptID: String?
     let preview: String
     let content: String
     let updatedAt: Date
     let relevance: Double
+
+    init(
+        retrievalHit: RetrievalHit,
+        folderTitle: String
+    ) {
+        id = retrievalHit.kind == .note ? retrievalHit.noteID : UUID()
+        noteID = retrievalHit.noteID
+        title = retrievalHit.title.isEmpty ? retrievalHit.noteTitle : retrievalHit.title
+        self.folderTitle = folderTitle
+        sourceKind = switch retrievalHit.kind {
+        case .note: .note
+        case .chunk: .chunk
+        case .concept: .concept
+        }
+        folderID = retrievalHit.folderID
+        chunkID = retrievalHit.chunkID
+        conceptID = retrievalHit.conceptID
+        preview = retrievalHit.snippet.isEmpty ? Self.snippet(from: retrievalHit.content, query: "") : retrievalHit.snippet
+        content = retrievalHit.content
+        updatedAt = retrievalHit.updatedAt ?? Date.distantPast
+        relevance = retrievalHit.relevance
+    }
 
     init?(folder: NoteFolder, note: NoteFile, query: String, terms: [String] = []) {
         let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -369,6 +426,9 @@ struct SearchResult: Identifiable, Equatable {
         self.title = title.isEmpty ? "Untitled Note" : title
         folderTitle = folder.title
         sourceKind = .note
+        folderID = folder.id
+        chunkID = nil
+        conceptID = nil
         preview = Self.snippet(from: content, query: normalizedQuery)
         self.content = note.content
         updatedAt = note.updatedAt
@@ -377,8 +437,7 @@ struct SearchResult: Identifiable, Equatable {
 
     private static func snippet(from content: String, query: String) -> String {
         let sanitized = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sanitized.isEmpty else { return "Empty note" }
-
+        guard !sanitized.isEmpty else { return "Empty result" }
         guard !query.isEmpty, let range = sanitized.lowercased().range(of: query.lowercased()) else {
             return String(sanitized.prefix(180)) + (sanitized.count > 180 ? "..." : "")
         }

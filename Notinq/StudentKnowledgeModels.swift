@@ -14,12 +14,14 @@ enum StudentKnowledgeLearningStatus: String, Codable, CaseIterable, Sendable {
 enum StudentKnowledgeReviewOutcome: String, Codable, CaseIterable, Sendable {
     case correct
     case incorrect
+    case partial
     case easy
     case hard
 }
 
 enum StudentKnowledgeReviewSource: String, Codable, CaseIterable, Sendable {
     case flashcard
+    case question
     case quiz
     case testMe
     case manual

@@ -165,6 +165,7 @@ struct MainContainerView: View {
                                 }
                             case .ai:
                                 AIWorkspaceView(
+                                    noteID: currentNoteID,
                                     noteTitle: currentNoteTitle,
                                     noteText: currentNoteText,
                                     lastUpdatedAt: currentNoteUpdatedAt
@@ -252,7 +253,12 @@ struct MainContainerView: View {
             content: currentNoteText,
             updatedAt: currentNoteUpdatedAt ?? Date()
         )
-        KnowledgeGraphManager.shared.generateGraph(note: note)
+        KnowledgeService.shared.ingest(note: KnowledgeIngestionRequest(
+            noteID: note.id,
+            title: note.title,
+            content: note.content,
+            updatedAt: note.updatedAt
+        ))
     }
 
     static func learningInsightsPanelSize(for editorSize: CGSize) -> CGSize {
@@ -373,7 +379,10 @@ struct MainContainerView: View {
 
     private func markFlashcardReviewed(_ card: StudyFlashcard) {
         guard let currentNoteID else { return }
-        let concept = inferConcept(from: card.front) ?? inferConcept(from: card.back) ?? card.type.title
+        let conceptCandidates = card.conceptIDs.isEmpty
+            ? [inferConcept(from: card.front), inferConcept(from: card.back), card.type.title].compactMap { $0 }
+            : card.conceptIDs
+        let concept = conceptCandidates.first ?? inferConcept(from: card.front) ?? inferConcept(from: card.back) ?? card.type.title
         appState.mutateStudyData(for: currentNoteID) { studyData in
             studyData.progress.flashcardsReviewed += 1
             if let index = studyData.learningMemory.firstIndex(where: { normalizedStudyConceptKey($0.concept) == normalizedStudyConceptKey(concept) }) {
@@ -398,6 +407,9 @@ struct MainContainerView: View {
             studyData.streaks.lastStudiedAt = Date()
             studyData.lastGeneratedAt = Date()
         }
+        for conceptID in conceptCandidates {
+            StudyService.shared.recordReviewEvent(conceptID: conceptID, noteID: currentNoteID, score: 1.0, kind: "flashcard")
+        }
     }
 
     private func recordQuizAttempt(quizSet: StudyQuizSet, score: Int, totalQuestions: Int) {
@@ -419,6 +431,15 @@ struct MainContainerView: View {
             studyData.streaks.studySessions += 1
             studyData.streaks.lastStudiedAt = Date()
             studyData.lastGeneratedAt = Date()
+        }
+        let normalizedScore = min(1.0, max(0.0, percentage / 100.0))
+        for question in quizSet.questions {
+            let conceptIDs = question.conceptIDs.isEmpty
+                ? [inferConcept(from: question.prompt), inferConcept(from: question.correctAnswer)].compactMap { $0 }
+                : question.conceptIDs
+            for conceptID in conceptIDs {
+                StudyService.shared.recordReviewEvent(conceptID: conceptID, noteID: currentNoteID, score: normalizedScore, kind: "question")
+            }
         }
     }
 

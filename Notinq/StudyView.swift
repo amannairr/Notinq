@@ -1751,7 +1751,12 @@ private extension StudyView {
                             content: noteText,
                             updatedAt: lastUpdatedAt ?? Date()
                         )
-                        KnowledgeGraphManager.shared.generateGraph(note: snapshot)
+                        KnowledgeService.shared.ingest(note: KnowledgeIngestionRequest(
+                            noteID: snapshot.id,
+                            title: snapshot.title,
+                            content: snapshot.content,
+                            updatedAt: snapshot.updatedAt
+                        ))
                     } label: {
                         Text("Update Graph")
                             .font(.caption.weight(.semibold))
@@ -3025,6 +3030,7 @@ struct StudyFlashcard: Identifiable, Codable, Equatable {
     var front: String
     var back: String
     var whyItMatters: String = ""
+    var conceptIDs: [String] = []
 }
 
 enum StudyQuizQuestionType: String, CaseIterable, Codable, Identifiable {
@@ -3066,6 +3072,7 @@ struct StudyQuizQuestion: Identifiable, Codable, Equatable {
     var correctAnswer: String
     var explanation: String = ""
     var keywords: [String] = []
+    var conceptIDs: [String] = []
 }
 
 struct StudyQuizSet: Identifiable, Codable, Equatable {
@@ -3082,6 +3089,7 @@ struct StudyTutorQuestion: Identifiable, Codable, Equatable {
     var keyPoints: [String] = []
     var explanation: String = ""
     var concept: String = ""
+    var conceptIDs: [String] = []
 }
 
 struct StudyTerm: Codable, Equatable, Identifiable {

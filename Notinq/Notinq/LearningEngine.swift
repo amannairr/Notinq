@@ -193,11 +193,13 @@ final class LearningEngine {
             .sorted { $0.importance > $1.importance }
             .prefix(12)
         return items.enumerated().map { index, item in
-            StudyFlashcard(
+            let linkedConceptIDs = matchingConceptIDs(for: item, in: knowledge)
+            return StudyFlashcard(
                 type: cardType(for: item.category, index: index),
                 front: item.title,
                 back: item.summary,
-                whyItMatters: item.evidence.first ?? item.summary
+                whyItMatters: item.evidence.first ?? item.summary,
+                conceptIDs: linkedConceptIDs
             )
         }
     }
@@ -368,6 +370,7 @@ final class LearningEngine {
             .prefix(8)
 
         return candidates.enumerated().map { index, item in
+            let linkedConceptIDs = matchingConceptIDs(for: item, in: knowledge)
             let distractors = Array(knowledge.concepts.map(\.title).filter { $0 != item.title }.prefix(3))
             let options = ([item.summary] + distractors).prefix(4).map { $0 }
             return StudyQuizQuestion(
@@ -376,7 +379,8 @@ final class LearningEngine {
                 options: options,
                 correctAnswer: item.summary,
                 explanation: item.evidence.first ?? item.summary,
-                keywords: [item.title]
+                keywords: [item.title],
+                conceptIDs: linkedConceptIDs
             )
         }
     }
@@ -438,6 +442,27 @@ final class LearningEngine {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private func matchingConceptIDs(for item: StudyKnowledgeItem, in knowledge: StudyKnowledgeSnapshot) -> [String] {
+        let normalizedItemTitle = normalizedConceptKey(item.title)
+        let matchedTitles = knowledge.concepts.compactMap { concept -> String? in
+            let normalizedConceptTitle = normalizedConceptKey(concept.title)
+            let aliases = concept.aliases.map(normalizedConceptKey)
+            if normalizedItemTitle == normalizedConceptTitle || aliases.contains(normalizedItemTitle) {
+                return concept.title
+            }
+            if !item.relatedTitles.isEmpty && item.relatedTitles.contains(where: { normalizedConceptKey($0) == normalizedConceptTitle }) {
+                return concept.title
+            }
+            return nil
+        }
+
+        if matchedTitles.isEmpty {
+            return [item.title]
+        }
+
+        return Array(Set(matchedTitles)).sorted()
     }
 
     private func coverageItem(index: Int, item: StudyKnowledgeItem, state: LectureCoverageState, noteSummary: String) -> LectureCoverageItem {

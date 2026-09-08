@@ -160,6 +160,7 @@ struct PromptBuildContext: Sendable {
     var structuredKnowledge: StructuredKnowledge?
     var knowledgeSnapshot: StudyKnowledgeSnapshot?
     var knowledgeGraph: KnowledgeGraph?
+    var tutorContext: TutorContext?
     var selectedText: String?
     var userRequest: String?
     var providerKind: AIProviderKind = .localLlama
@@ -173,6 +174,7 @@ struct PromptBuildContext: Sendable {
         structuredKnowledge: StructuredKnowledge? = nil,
         knowledgeSnapshot: StudyKnowledgeSnapshot? = nil,
         knowledgeGraph: KnowledgeGraph? = nil,
+        tutorContext: TutorContext? = nil,
         selectedText: String? = nil,
         userRequest: String? = nil,
         providerKind: AIProviderKind = .localLlama,
@@ -185,6 +187,7 @@ struct PromptBuildContext: Sendable {
         self.structuredKnowledge = structuredKnowledge
         self.knowledgeSnapshot = knowledgeSnapshot
         self.knowledgeGraph = knowledgeGraph
+        self.tutorContext = tutorContext
         self.selectedText = selectedText
         self.userRequest = userRequest
         self.providerKind = providerKind

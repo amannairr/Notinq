@@ -89,9 +89,18 @@ final class AIModelLibrary {
         AIModelDefinition(
             id: "qwen-3-4b",
             displayName: "Qwen3 4B Instruct",
-            fileName: "qwen3-4b-q4_k_m.gguf",
+            fileName: "Qwen3-4B-Q4_K_M.gguf",
             tier: .advanced,
             summary: "Default high-quality local generation model.",
+            downloadURL: nil,
+            bundledSubdirectory: "Models"
+        ),
+        AIModelDefinition(
+            id: "qwen-2-5-3b",
+            displayName: "Qwen2.5 3B Instruct",
+            fileName: "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            tier: .advanced,
+            summary: "Compatibility fallback for local generation and regression comparisons.",
             downloadURL: nil,
             bundledSubdirectory: "Models"
         )
@@ -200,9 +209,13 @@ final class AIModelLibrary {
         if let exact = installed.first(where: { $0.sourceDefinitionID == "qwen-3-4b" }) {
             return exact.fileURL
         }
+        if let exact = installed.first(where: { $0.sourceDefinitionID == "qwen-2-5-3b" }) {
+            return exact.fileURL
+        }
         return installed.first(where: { record in
             record.displayName.localizedCaseInsensitiveContains("qwen3")
                 || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("qwen3")
+                || record.displayName.localizedCaseInsensitiveContains("qwen2.5")
                 || record.fileURL.lastPathComponent.localizedCaseInsensitiveContains("4b")
         })?.fileURL
     }
@@ -312,7 +325,7 @@ final class AIModelLibrary {
 
     func preferredCatalogModel(for tier: AICapabilityTier) -> AIModelDefinition? {
         _ = tier
-        return catalog.first(where: { $0.id == "qwen-3-4b" })
+        return catalog.first(where: { $0.id == "qwen-3-4b" }) ?? catalog.first(where: { $0.id == "qwen-2-5-3b" })
     }
 
     private func ensureModelsDirectoryExists() -> Bool {

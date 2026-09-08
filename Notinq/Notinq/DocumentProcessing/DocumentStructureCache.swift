@@ -25,10 +25,10 @@ final class DocumentStructureCache: DocumentStructureCaching {
     init(cacheURL: URL? = nil) {
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.sortedKeys]
-        self.encoder.dateEncodingStrategy = .iso8601
+        self.encoder.dateEncodingStrategy = .secondsSince1970
 
         self.decoder = JSONDecoder()
-        self.decoder.dateDecodingStrategy = .iso8601
+        self.decoder.dateDecodingStrategy = .secondsSince1970
 
         if let cacheURL {
             self.cacheURL = cacheURL

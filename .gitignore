@@ -1,15 +1,17 @@
+# Xcode
+DerivedData/
+.derivedData/
+build/
+
+# Test artifacts
+*.xcresult
+
+# Logs
+*.log
+
+# Temp files
+result.json
+persistence-tests.exit
+
 # macOS
 .DS_Store
-
-# Xcode
-xcuserdata/
-DerivedData/
-
-# Top-level local evaluation exports
-/Evaluation/
-
-# Local AI models
-*.gguf
-Models/
-Resources/Models/
-

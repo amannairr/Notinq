@@ -81,17 +81,17 @@ final class ModelManager {
             AIModelRecommendation(
                 title: "8 GB",
                 reasoning: "Default local recommendation for lower-memory systems.",
-                modelIDs: ["qwen-3-4b"]
+                modelIDs: ["qwen-2-5-3b", "qwen-3-4b"]
             ),
             AIModelRecommendation(
                 title: "16 GB+",
                 reasoning: "Can run higher quality local models comfortably.",
-                modelIDs: ["qwen-3-4b"]
+                modelIDs: ["qwen-3-4b", "qwen-2-5-3b"]
             ),
             AIModelRecommendation(
                 title: "24 GB+",
                 reasoning: "Supports more capable local models and larger contexts.",
-                modelIDs: ["qwen-3-4b"]
+                modelIDs: ["qwen-3-4b", "qwen-2-5-3b"]
             )
         ]
         .filter { recommendation in
@@ -250,17 +250,22 @@ final class ModelManager {
             return (preferred.fileURL, preferred.id)
         }
 
-        if let installedDefault = library.installedModel(for: fallbackModelID()) {
-            return (installedDefault.fileURL, installedDefault.id)
+        let fallbackCandidates = ["qwen-3-4b", "qwen-2-5-3b"]
+        for candidateID in fallbackCandidates {
+            if let installed = library.installedModel(for: candidateID) {
+                return (installed.fileURL, installed.id)
+            }
         }
 
-        if let defaultDefinition = library.catalogDefinition(for: fallbackModelID()),
-           let sourceURL = defaultDefinition.bundledResourceURL {
-            do {
-                let installed = try library.installModel(from: sourceURL, preferred: true)
-                return (installed.fileURL, installed.id)
-            } catch {
-                AIPerfLog.debug("failed installing default model: \(error.localizedDescription)")
+        for candidateID in fallbackCandidates {
+            if let defaultDefinition = library.catalogDefinition(for: candidateID),
+               let sourceURL = defaultDefinition.bundledResourceURL {
+                do {
+                    let installed = try library.installModel(from: sourceURL, preferred: candidateID == "qwen-3-4b")
+                    return (installed.fileURL, installed.id)
+                } catch {
+                    AIPerfLog.debug("failed installing default model \(candidateID): \(error.localizedDescription)")
+                }
             }
         }
 

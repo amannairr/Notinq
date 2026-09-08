@@ -120,6 +120,15 @@ struct PromptTutorResponse: Codable, Equatable, Sendable {
     var keyPoints: [String]
     var followUpQuestions: [String]
     var confidence: Double
+    var citations: [PromptTutorCitation]? = nil
+}
+
+struct PromptTutorCitation: Codable, Equatable, Sendable {
+    var sourceType: String
+    var sourceID: String
+    var noteTitle: String
+    var conceptName: String?
+    var snippet: String
 }
 
 struct PromptDefinitionEntry: Codable, Equatable, Sendable {
@@ -317,7 +326,7 @@ enum PromptCatalog {
     static let insightsSchema = PromptSchemaDescriptor(name: "PromptLearningInsightsOutput", description: "Learning insights", requiredFields: ["keyConcepts", "importantConcepts", "confidence"], jsonSchema: "{ \"keyConcepts\": [\"string\"], \"importantConcepts\": [\"string\"], \"frequentTerms\": [{\"term\":\"string\",\"count\":\"number\"}], \"potentialExamTopics\": [\"string\"], \"knowledgeGaps\": [\"string\"], \"confidence\": \"number\" }")
     static let conceptMapSchema = PromptSchemaDescriptor(name: "PromptConceptNode", description: "Concept map tree", requiredFields: ["title"], jsonSchema: "{ \"title\": \"string\", \"summary\": \"string\", \"children\": [] }")
     static let graphExpansionSchema = PromptSchemaDescriptor(name: "KnowledgeGraphExtractionPayload", description: "Graph expansion payload", requiredFields: ["concepts", "relationships"], jsonSchema: "{ \"concepts\": [], \"relationships\": [] }")
-    static let tutorSchema = PromptSchemaDescriptor(name: "PromptTutorResponse", description: "Tutor response", requiredFields: ["answer", "keyPoints", "followUpQuestions", "confidence"], jsonSchema: "{ \"answer\": \"string\", \"keyPoints\": [\"string\"], \"followUpQuestions\": [\"string\"], \"confidence\": \"number\" }")
+    static let tutorSchema = PromptSchemaDescriptor(name: "PromptTutorResponse", description: "Tutor response", requiredFields: ["answer", "keyPoints", "followUpQuestions", "confidence"], jsonSchema: "{ \"answer\": \"string\", \"keyPoints\": [\"string\"], \"followUpQuestions\": [\"string\"], \"confidence\": \"number\", \"citations\": [{\"sourceType\":\"string\",\"sourceID\":\"string\",\"noteTitle\":\"string\",\"conceptName\":\"string\",\"snippet\":\"string\"}] }")
     static let definitionsSchema = PromptSchemaDescriptor(name: "PromptDefinitionSet", description: "Definitions", requiredFields: ["definitions"], jsonSchema: "{ \"definitions\": [{\"term\":\"string\",\"definition\":\"string\",\"aliases\":[\"string\"],\"example\":\"string\",\"confidence\":\"number\"}] }")
     static let timelineSchema = PromptSchemaDescriptor(name: "PromptTimeline", description: "Timeline", requiredFields: ["title", "events"], jsonSchema: "{ \"title\": \"string\", \"events\": [{\"dateLabel\":\"string\",\"event\":\"string\",\"significance\":\"string\",\"confidence\":\"number\"}] }")
     static let formulaSchema = PromptSchemaDescriptor(name: "PromptFormulaSet", description: "Formula extraction", requiredFields: ["formulas"], jsonSchema: "{ \"formulas\": [{\"formula\":\"string\",\"meaning\":\"string\",\"variables\":[\"string\"],\"example\":\"string\",\"confidence\":\"number\"}] }")
@@ -702,15 +711,18 @@ struct TutorPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .graphAware
 
     static func buildDocument(input: PromptTutorInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let tutorGuidance = context.tutorContext?.guidanceSummary ?? "No mastery data available."
+        let evidenceSummary = context.tutorContext?.evidenceSummary ?? "No retrieved evidence available."
+        let citationsJSON = PromptJSONSupport.encode(context.tutorContext?.citations ?? [])
+        return PromptBuilder.buildDocument(
             role: "You are a local study tutor.",
             task: "Answer the user's question using the structured knowledge snapshot.",
-            rules: ["Do not invent facts.", "Use concise explanations.", "Prefer direct answers."],
+            rules: ["Do not invent facts.", "Use concise explanations.", "Prefer direct answers.", "Adapt the explanation depth to the student's mastery.", PromptFragments.citationRules(), "Reference the retrieved evidence and source notes when available."],
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
-            failureRules: ["Do not answer outside the knowledge snapshot.", "Do not add unsupported references."],
-            validationRules: ["The answer should relate to the question.", "Include key points and follow-up questions."],
-            body: "Note title: \(input.noteTitle)\n\nQuestion: \(input.question)\n\nKnowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))",
+            failureRules: ["Do not answer outside the knowledge snapshot.", "Do not add unsupported references.", "Do not cite sources that do not appear in the evidence summary."],
+            validationRules: ["The answer should relate to the question.", "Include key points and follow-up questions.", "Ground the explanation in retrieved notes, chunks, or concepts."],
+            body: "Note title: \(input.noteTitle)\n\nQuestion: \(input.question)\n\nTutor guidance:\n\(tutorGuidance)\n\nEvidence summary:\n\(evidenceSummary)\n\nCitations JSON:\n\(citationsJSON)\n\nKnowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))",
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -720,10 +732,27 @@ struct TutorPrompt: PromptDefinition {
     }
 
     static func validate(output: PromptTutorResponse, input: PromptTutorInput, context: PromptBuildContext) -> PromptValidationReport {
-        let issues = output.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? [PromptValidationIssue(field: "answer", message: "Missing answer", severity: .error)]
-            : []
-        return PromptValidationReport(isValid: !issues.contains(where: { $0.severity == .error }), shouldRetry: !issues.isEmpty, confidence: output.confidence, issues: issues)
+        let trimmedAnswer = output.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        var issues: [PromptValidationIssue] = []
+
+        if trimmedAnswer.isEmpty {
+            issues.append(PromptValidationIssue(field: "answer", message: "Missing answer", severity: .error))
+        }
+
+        let lowerQuestion = input.question.lowercased()
+        let supportedConcepts = input.knowledge.concepts.filter { concept in
+            ([concept.name] + concept.aliases).contains(where: { lowerQuestion.contains($0.lowercased()) })
+        }
+        if supportedConcepts.isEmpty {
+            issues.append(PromptValidationIssue(field: "coverage", message: "The question is not grounded in the supplied knowledge", severity: .warning))
+        }
+
+        return PromptValidationReport(
+            isValid: !issues.contains(where: { $0.severity == .error }),
+            shouldRetry: !issues.isEmpty,
+            confidence: output.confidence,
+            issues: issues
+        )
     }
 }
 

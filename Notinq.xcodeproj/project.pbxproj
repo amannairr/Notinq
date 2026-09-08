@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		071AAE76301650510076E7B7 /* qwen3-4b-q4_k_m.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 071AAE75301650510076E7B7 /* qwen3-4b-q4_k_m.gguf */; };
 		071AAE80301E0DF40076E7B7 /* PromptTextAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */; };
 		071AAE84301E10B20076E7B7 /* SemanticChunker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE83301E10B20076E7B7 /* SemanticChunker.swift */; };
 		071AAE86301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */; };
@@ -47,13 +46,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		071AAE75301650510076E7B7 /* qwen3-4b-q4_k_m.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "qwen3-4b-q4_k_m.gguf"; sourceTree = "<group>"; };
 		071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTextAssets.swift; sourceTree = "<group>"; };
 		071AAE83301E10B20076E7B7 /* SemanticChunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticChunker.swift; sourceTree = "<group>"; };
 		071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeExtractionDebuggerView.swift; sourceTree = "<group>"; };
 		07279D8B2F8AA40300A1D363 /* Notinq.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notinq.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279D9A2F8AA40400A1D363 /* NotinqTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0774B93F304C8F0B006E2D58 /* Qwen3-4B-Q4_K_M.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Qwen3-4B-Q4_K_M.gguf"; sourceTree = "<group>"; };
 		07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyResponseParser.swift; sourceTree = "<group>"; };
 		07B462862FA64859009B2513 /* WhisperBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WhisperBridge.h; sourceTree = "<group>"; };
 		07B462872FA64859009B2513 /* WhisperBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WhisperBridge.mm; sourceTree = "<group>"; };
@@ -220,7 +219,7 @@
 		07B462932FA760E6009B2513 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				071AAE75301650510076E7B7 /* qwen3-4b-q4_k_m.gguf */,
+				0774B93F304C8F0B006E2D58 /* Qwen3-4B-Q4_K_M.gguf */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -360,7 +359,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				071AAE76301650510076E7B7 /* qwen3-4b-q4_k_m.gguf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

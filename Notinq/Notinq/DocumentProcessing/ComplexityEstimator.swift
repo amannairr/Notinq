@@ -27,7 +27,11 @@ final class ComplexityEstimator: DocumentComplexityEstimating {
             let sectionSentenceCount = max(1, sectionText.components(separatedBy: CharacterSet(charactersIn: ".!?")).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count)
             let sectionTokenEstimate = max(1, Int((Double(sectionWordCount) * 1.25).rounded(.up)))
             let sectionDensity = Double(sectionBlocks.count) / Double(max(1, sectionSentenceCount))
-            let sectionDifficulty = difficulty(for: Double(sectionWordCount) / Double(sectionSentenceCount), density: sectionDensity)
+            let sectionDifficulty = difficulty(
+                for: Double(sectionWordCount) / Double(sectionSentenceCount),
+                density: sectionDensity,
+                wordCount: sectionWordCount
+            )
 
             return DocumentSectionComplexity(
                 sectionID: section.id,
@@ -40,7 +44,7 @@ final class ComplexityEstimator: DocumentComplexityEstimating {
         }
 
         return DocumentComplexityEstimate(
-            readingDifficulty: difficulty(for: averageSentenceLength, density: structuralDensity),
+            readingDifficulty: difficulty(for: averageSentenceLength, density: structuralDensity, wordCount: wordCount),
             conceptDensity: min(1.0, conceptDensity),
             estimatedStudyMinutes: estimatedStudyMinutes,
             structuralDensity: min(1.0, structuralDensity),
@@ -58,8 +62,9 @@ final class ComplexityEstimator: DocumentComplexityEstimating {
         )
     }
 
-    private func difficulty(for averageSentenceLength: Double, density: Double) -> DocumentReadingDifficulty {
-        let score = averageSentenceLength / 18.0 + density * 1.75
+    private func difficulty(for averageSentenceLength: Double, density: Double, wordCount: Int) -> DocumentReadingDifficulty {
+        let lengthBoost = min(0.45, Double(max(0, wordCount)) / 300.0)
+        let score = averageSentenceLength / 18.0 + density * 1.75 + lengthBoost
         switch score {
         case ..<1.0:
             return .easy

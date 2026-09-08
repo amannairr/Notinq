@@ -35,11 +35,18 @@ final class KnowledgeExtractionCache {
     func cachedKnowledge(for signature: String) -> StructuredKnowledge? {
         queue.sync {
             if let entry = memoryCache[signature] {
+                guard entry.knowledge.hasContent else {
+                    memoryCache.removeValue(forKey: signature)
+                    return nil
+                }
                 return entry.knowledge
             }
             guard let data = try? Data(contentsOf: cacheURL),
                   let stored = try? decoder.decode([String: KnowledgeExtractionCacheEntry].self, from: data),
                   let entry = stored[signature] else {
+                return nil
+            }
+            guard entry.knowledge.hasContent else {
                 return nil
             }
             memoryCache[signature] = entry
@@ -48,6 +55,7 @@ final class KnowledgeExtractionCache {
     }
 
     func store(_ knowledge: StructuredKnowledge, for signature: String) {
+        guard knowledge.hasContent else { return }
         queue.sync {
             let entry = KnowledgeExtractionCacheEntry(signature: signature, updatedAt: Date(), knowledge: knowledge)
             memoryCache[signature] = entry

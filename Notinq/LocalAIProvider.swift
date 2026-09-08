@@ -86,12 +86,14 @@ final class LocalAIProvider: AIProvider {
             return
         }
 
-        guard let model = availableModels().first else {
+        let models = availableModels()
+        guard let model = models.first else {
             throw InferenceError.modelNotFound
         }
 
-        let qwen3Model = availableModels().first(where: { $0.id == "qwen-3-4b" })
-        let preferredModel = qwen3Model ?? model
+        let preferredModel = models.first(where: { $0.id == "qwen-3-4b" })
+            ?? models.first(where: { $0.id == "qwen-2-5-3b" })
+            ?? model
         try await backend.loadModel(preferredModel, configuration: configuration)
     }
 

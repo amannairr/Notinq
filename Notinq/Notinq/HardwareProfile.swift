@@ -51,7 +51,7 @@ enum HardwareDetector {
         _ = eightGB
         _ = sixteenGB
         _ = twentyFourGB
-        return ["qwen-3-4b"]
+        return ["qwen-3-4b", "qwen-2-5-3b"]
     }
 
     private static func availableMemoryBytes() -> UInt64 {

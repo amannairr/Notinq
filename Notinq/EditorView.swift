@@ -204,13 +204,6 @@ struct EditorView: View {
             return
         }
 
-        let snapshot = NoteFile(
-            id: noteID,
-            title: appState.noteTitle(for: noteID),
-            content: liveText,
-            updatedAt: appState.noteUpdatedAt(for: noteID) ?? Date()
-        )
-        KnowledgeGraphManager.shared.generateGraph(note: snapshot)
     }
 
     private func selectionActionTitle(for action: AIAction) -> String {
