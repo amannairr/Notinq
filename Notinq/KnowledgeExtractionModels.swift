@@ -13,6 +13,50 @@ struct KnowledgeMetadata: Codable, Equatable, Sendable {
     var appVersion: String = ""
     var gitCommit: String = ""
     var sourceSignature: String = ""
+
+    init(
+        noteID: String = "",
+        title: String = "",
+        subject: String = "",
+        sourceType: String = "note",
+        approximateTokenCount: Int = 0,
+        sectionCount: Int = 0,
+        extractedAt: Date = Date(),
+        modelName: String = "",
+        promptVersion: String = "",
+        appVersion: String = "",
+        gitCommit: String = "",
+        sourceSignature: String = ""
+    ) {
+        self.noteID = noteID
+        self.title = title
+        self.subject = subject
+        self.sourceType = sourceType
+        self.approximateTokenCount = approximateTokenCount
+        self.sectionCount = sectionCount
+        self.extractedAt = extractedAt
+        self.modelName = modelName
+        self.promptVersion = promptVersion
+        self.appVersion = appVersion
+        self.gitCommit = gitCommit
+        self.sourceSignature = sourceSignature
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        noteID = try container.decodeIfPresent(String.self, forKey: .noteID) ?? ""
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        subject = try container.decodeIfPresent(String.self, forKey: .subject) ?? ""
+        sourceType = try container.decodeIfPresent(String.self, forKey: .sourceType) ?? "note"
+        approximateTokenCount = try container.decodeIfPresent(Int.self, forKey: .approximateTokenCount) ?? 0
+        sectionCount = try container.decodeIfPresent(Int.self, forKey: .sectionCount) ?? 0
+        extractedAt = try container.decodeIfPresent(Date.self, forKey: .extractedAt) ?? Date()
+        modelName = try container.decodeIfPresent(String.self, forKey: .modelName) ?? ""
+        promptVersion = try container.decodeIfPresent(String.self, forKey: .promptVersion) ?? ""
+        appVersion = try container.decodeIfPresent(String.self, forKey: .appVersion) ?? ""
+        gitCommit = try container.decodeIfPresent(String.self, forKey: .gitCommit) ?? ""
+        sourceSignature = try container.decodeIfPresent(String.self, forKey: .sourceSignature) ?? ""
+    }
 }
 
 enum KnowledgeSectionKind: String, Codable, CaseIterable, Sendable {
@@ -158,6 +202,95 @@ struct StructuredKnowledge: Codable, Equatable, Sendable {
     var supportingEvidence: [String] = []
     var summaryHighlights: [String] = []
     var examFocus: [String] = []
+
+    init(
+        metadata: KnowledgeMetadata = KnowledgeMetadata(),
+        title: String = "",
+        topics: [String] = [],
+        sections: [KnowledgeSection] = [],
+        concepts: [KnowledgeConcept] = [],
+        definitions: [KnowledgeDefinition] = [],
+        examples: [KnowledgeExample] = [],
+        processes: [KnowledgeProcess] = [],
+        relationships: [KnowledgeRelationship] = [],
+        learningObjectives: [KnowledgeObjective] = [],
+        actionItems: [KnowledgeActionItem] = [],
+        keywords: [String] = [],
+        confidence: Double = 0.5,
+        sourceLocations: [KnowledgeSourceLocation] = [],
+        difficulty: StudyKnowledgeDifficulty = .intermediate,
+        importance: Double = 0.5,
+        aliases: [String] = [],
+        procedures: [String] = [],
+        formulas: [String] = [],
+        importantFacts: [String] = [],
+        keyTerminology: [String] = [],
+        misconceptions: [String] = [],
+        prerequisites: [String] = [],
+        hierarchy: [KnowledgeSection] = [],
+        supportingEvidence: [String] = [],
+        summaryHighlights: [String] = [],
+        examFocus: [String] = []
+    ) {
+        self.metadata = metadata
+        self.title = title
+        self.topics = topics
+        self.sections = sections
+        self.concepts = concepts
+        self.definitions = definitions
+        self.examples = examples
+        self.processes = processes
+        self.relationships = relationships
+        self.learningObjectives = learningObjectives
+        self.actionItems = actionItems
+        self.keywords = keywords
+        self.confidence = confidence
+        self.sourceLocations = sourceLocations
+        self.difficulty = difficulty
+        self.importance = importance
+        self.aliases = aliases
+        self.procedures = procedures
+        self.formulas = formulas
+        self.importantFacts = importantFacts
+        self.keyTerminology = keyTerminology
+        self.misconceptions = misconceptions
+        self.prerequisites = prerequisites
+        self.hierarchy = hierarchy
+        self.supportingEvidence = supportingEvidence
+        self.summaryHighlights = summaryHighlights
+        self.examFocus = examFocus
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        metadata = try container.decodeIfPresent(KnowledgeMetadata.self, forKey: .metadata) ?? KnowledgeMetadata()
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        topics = try container.decodeIfPresent([String].self, forKey: .topics) ?? []
+        sections = try container.decodeIfPresent([KnowledgeSection].self, forKey: .sections) ?? []
+        concepts = try container.decodeIfPresent([KnowledgeConcept].self, forKey: .concepts) ?? []
+        definitions = try container.decodeIfPresent([KnowledgeDefinition].self, forKey: .definitions) ?? []
+        examples = try container.decodeIfPresent([KnowledgeExample].self, forKey: .examples) ?? []
+        processes = try container.decodeIfPresent([KnowledgeProcess].self, forKey: .processes) ?? []
+        relationships = try container.decodeIfPresent([KnowledgeRelationship].self, forKey: .relationships) ?? []
+        learningObjectives = try container.decodeIfPresent([KnowledgeObjective].self, forKey: .learningObjectives) ?? []
+        actionItems = try container.decodeIfPresent([KnowledgeActionItem].self, forKey: .actionItems) ?? []
+        keywords = try container.decodeIfPresent([String].self, forKey: .keywords) ?? []
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
+        sourceLocations = try container.decodeIfPresent([KnowledgeSourceLocation].self, forKey: .sourceLocations) ?? []
+        difficulty = try container.decodeIfPresent(StudyKnowledgeDifficulty.self, forKey: .difficulty) ?? .intermediate
+        importance = try container.decodeIfPresent(Double.self, forKey: .importance) ?? 0.5
+        aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        procedures = try container.decodeIfPresent([String].self, forKey: .procedures) ?? []
+        formulas = try container.decodeIfPresent([String].self, forKey: .formulas) ?? []
+        importantFacts = try container.decodeIfPresent([String].self, forKey: .importantFacts) ?? []
+        keyTerminology = try container.decodeIfPresent([String].self, forKey: .keyTerminology) ?? []
+        misconceptions = try container.decodeIfPresent([String].self, forKey: .misconceptions) ?? []
+        prerequisites = try container.decodeIfPresent([String].self, forKey: .prerequisites) ?? []
+        hierarchy = try container.decodeIfPresent([KnowledgeSection].self, forKey: .hierarchy) ?? []
+        supportingEvidence = try container.decodeIfPresent([String].self, forKey: .supportingEvidence) ?? []
+        summaryHighlights = try container.decodeIfPresent([String].self, forKey: .summaryHighlights) ?? []
+        examFocus = try container.decodeIfPresent([String].self, forKey: .examFocus) ?? []
+    }
 
     var hasContent: Bool {
         !title.isEmpty

@@ -180,6 +180,12 @@ final class PromptRegistry {
         document.responseFormat = .json
         document.temperature = min(document.temperature, 0.2)
         document.topP = min(document.topP, 0.9)
+        if let knowledgeJSON = context.knowledgeJSON,
+           identifier != .knowledgeExtraction,
+           identifier != .assistantChat,
+           identifier != .directEditing {
+            document.userPrompt = "Structured knowledge JSON:\n\(knowledgeJSON)"
+        }
         return buildRequest(from: document, identifier: identifier)
     }
 

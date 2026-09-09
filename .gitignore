@@ -2,12 +2,26 @@
 DerivedData/
 .derivedData/
 build/
+xcuserdata/
+*.xcuserstate
+Notinq.xcodeproj/xcuserdata/
+Notinq.xcodeproj/project.xcworkspace/xcuserdata/
+Notinq.xcodeproj/*.backup
+Notinq.xcodeproj/*.pre-gguf-removal
 
 # Test artifacts
 *.xcresult
 
 # Logs
 *.log
+
+# Local models
+*.gguf
+Models/
+Notinq/Models/
+Notinq/Resources/Models/
+Notinq/Notinq/Models/
+Notinq/Notinq/Resources/Models/
 
 # Temp files
 result.json

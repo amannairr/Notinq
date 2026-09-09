@@ -3490,7 +3490,7 @@ struct StudyView: View {
     static let outerChromePadding: CGFloat = 0
     static let outerChromeCornerRadius: CGFloat = 0
     static func studyScrollBottomPadding(hasOverflow: Bool) -> CGFloat {
-        hasOverflow ? 140 : 88
+        hasOverflow ? 180 : 72
     }
 
     private func isSupplementalSectionExpanded(_ section: SupplementalStudySection) -> Bool {

@@ -28,11 +28,7 @@ final class LearningEngine {
     }
 
     func extractStructuredKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StructuredKnowledge {
-        let result = await pipeline.extractKnowledge(
-            noteTitle: structure.title,
-            noteText: structure.normalizedText,
-            notebookText: notebookText
-        )
+        let result = await pipeline.extractKnowledge(from: structure, notebookText: notebookText)
         return result.structuredKnowledge
     }
 

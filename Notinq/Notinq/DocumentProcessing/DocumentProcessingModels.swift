@@ -38,6 +38,17 @@ struct DocumentMetadata: Codable, Equatable, Sendable {
     var lineCount: Int = 0
     var processedAt: Date = Date()
     var processingVersion: String = "v2"
+
+    static func == (lhs: DocumentMetadata, rhs: DocumentMetadata) -> Bool {
+        lhs.documentID == rhs.documentID
+            && lhs.title == rhs.title
+            && lhs.sourceKind == rhs.sourceKind
+            && lhs.contentHash == rhs.contentHash
+            && lhs.normalizedCharacterCount == rhs.normalizedCharacterCount
+            && lhs.lineCount == rhs.lineCount
+            && abs(lhs.processedAt.timeIntervalSince1970 - rhs.processedAt.timeIntervalSince1970) < 0.000001
+            && lhs.processingVersion == rhs.processingVersion
+    }
 }
 
 struct DocumentBlock: Identifiable, Codable, Equatable, Sendable {

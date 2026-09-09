@@ -181,7 +181,7 @@ extension AIProvider {
         return InferenceResponse(
             text: result.text,
             latency: result.metrics?.generationTime ?? 0,
-            tokensGenerated: Int(result.metrics?.tokensPerSecond ?? 0),
+            tokensGenerated: estimatedGeneratedTokens(for: result.text),
             promptTokens: 0,
             completionTokens: 0,
             finishReason: "stop"
@@ -194,11 +194,17 @@ extension AIProvider {
         return InferenceResponse(
             text: result.text,
             latency: result.metrics?.generationTime ?? 0,
-            tokensGenerated: Int(result.metrics?.tokensPerSecond ?? 0),
+            tokensGenerated: estimatedGeneratedTokens(for: result.text),
             promptTokens: 0,
             completionTokens: 0,
             finishReason: "stop"
         )
+    }
+
+    private func estimatedGeneratedTokens(for text: String) -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return max(1, trimmed.split { $0.isWhitespace || $0.isNewline }.count)
     }
 }
 

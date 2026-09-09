@@ -15,7 +15,7 @@ enum PromptFragments {
         [
             "Use structured JSON whenever possible.",
             "Return valid JSON only whenever a schema is provided.",
-            "Do not wrap JSON in markdown fences."
+            "Do not wrap JSON in code fences."
         ]
     }
 
@@ -90,7 +90,7 @@ enum PromptFragments {
         """
         JSON Formatting:
         - Return valid JSON only.
-        - Do not wrap the response in markdown fences.
+        - Do not wrap the response in code fences.
         - Use stable keys and stable ordering.
         """
     }

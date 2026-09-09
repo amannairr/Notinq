@@ -124,7 +124,9 @@ enum KnowledgeValidator {
 
         if let structure, payload.concepts.count < max(1, structure.complexity.headingCount) {
             issues.append(.init(severity: .warning, field: "coverage", message: "Concept coverage appears low for the document structure"))
-            shouldRetry = true
+            if payload.concepts.isEmpty {
+                shouldRetry = true
+            }
         }
 
         let isValid = !issues.contains(where: { $0.severity == .error })
@@ -148,15 +150,15 @@ enum KnowledgeValidator {
         payload.topics = dedupeStrings(payload.topics)
         payload.sections = dedupe(payload.sections) { normalize($0.title + " " + $0.content) }
         payload.sections = payload.sections.map(normalizeSection(_:))
-        payload.concepts = dedupe(payload.concepts) { normalize($0.name) }
+        payload.concepts = payload.concepts
             .map(normalizeConcept(_:))
             .filter { isMeaningfulTerm($0.name) }
-        payload.definitions = dedupe(payload.definitions) { normalize($0.term + " " + $0.definition) }
+        payload.definitions = payload.definitions
             .map(normalizeDefinition(_:))
             .filter { isMeaningfulTerm($0.term) && isMeaningfulTerm($0.definition) }
         payload.examples = dedupe(payload.examples) { normalize($0.conceptID + " " + $0.example) }.map(normalizeExample(_:))
         payload.processes = dedupe(payload.processes) { normalize($0.title + " " + $0.steps.joined(separator: " ")) }.map(normalizeProcess(_:))
-        payload.relationships = dedupe(payload.relationships) { normalize("\($0.sourceID) \($0.targetID) \($0.relation)") }
+        payload.relationships = payload.relationships
             .map(normalizeRelationship(_:))
             .filter { !$0.sourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.targetID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         payload.learningObjectives = dedupe(payload.learningObjectives) { normalize($0.objective) }.map(normalizeObjective(_:))

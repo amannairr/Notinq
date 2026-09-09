@@ -441,7 +441,7 @@ struct KnowledgeExtractionPrompt: PromptDefinition {
             confidenceRequirement: confidenceRequirement,
             failureRules: [
                 "Do not invent concepts, relationships, or examples.",
-                "Do not use markdown fences or prose outside JSON.",
+                "Do not use code fences or prose outside JSON.",
                 "Do not reorder the extracted sections."
             ],
             validationRules: [
@@ -498,12 +498,12 @@ struct SummaryPrompt: PromptDefinition {
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
         let body = PromptJSONSupport.encode(input.knowledge)
         return PromptBuilder.buildDocument(
-            role: "You are a study summarizer.",
-            task: "Write a summary that stays faithful to the structured knowledge.",
+            role: "You are a study summary writer.",
+            task: "Write a study summary that stays faithful to the structured knowledge.",
             rules: ["Do not add facts not present in the knowledge snapshot.", "Prefer short, direct language."],
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
-            failureRules: ["Do not emit markdown.", "Do not repeat the same point more than once."],
+            failureRules: ["Do not emit formatted prose outside the schema.", "Do not repeat the same point more than once."],
             validationRules: ["All sections must be present.", "Summary should be grounded in extracted concepts."],
             body: "Note title: \(input.noteTitle)\n\nStructured knowledge JSON:\n\(body)",
             temperature: defaultTemperature,
@@ -538,7 +538,7 @@ struct FlashcardsPrompt: PromptDefinition {
             rules: ["One concept per card.", "Avoid redundant cards.", "Keep backs short and precise."],
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
-            failureRules: ["Do not add explanations beyond the back field.", "Do not output markdown."],
+            failureRules: ["Do not add explanations beyond the back field.", "Do not output formatted prose outside the schema."],
             validationRules: ["Each card needs a front and back.", "Avoid duplicate fronts."],
             body: "Structured knowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))",
             temperature: defaultTemperature,

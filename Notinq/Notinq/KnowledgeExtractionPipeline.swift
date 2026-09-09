@@ -261,7 +261,9 @@ final class KnowledgeExtractionEngine {
     private func chunkedExtractRun(from structure: DocumentStructure, notebookText: String) async -> KnowledgeExtractionRun {
         let normalizedNoteText = structure.normalizedText
         let normalizedNotebookText = normalize(notebookText)
-        let signature = signatureFor(noteTitle: structure.title, noteText: normalizedNoteText, notebookText: normalizedNotebookText)
+        let signature = structure.sourceSignature.isEmpty
+            ? signatureFor(noteTitle: structure.title, noteText: normalizedNoteText, notebookText: normalizedNotebookText)
+            : structure.sourceSignature
         let strategy = strategyFor(text: normalizedNoteText)
         let chunks = SemanticChunker.shared.chunk(
             title: structure.title,
@@ -480,14 +482,25 @@ final class KnowledgeExtractionEngine {
         var tokenCount = max(1, chunk.content.split { $0.isWhitespace || $0.isNewline }.count)
         var latency: TimeInterval = 0
         var validationWarnings: [String] = []
-        let sourceReferences = sourceReferences(for: [chunk], sourceSignature: structure.sourceSignature)
+        let chunkSourceID = heuristic.metadata.noteID.isEmpty
+            ? "\(chunk.documentID)#chunk-\(chunk.chunkIndex)"
+            : heuristic.metadata.noteID
+        let sourceReferences = [
+            ExtractionSourceReference(
+                chunkID: chunkSourceID,
+                documentID: chunk.documentID,
+                chunkIndex: chunk.chunkIndex,
+                startOffset: nil,
+                endOffset: nil
+            )
+        ]
         let heuristicCanonical = heuristic.canonicalExtractionPayload(sourceReferences: sourceReferences)
         let normalizedHeuristicCanonical = ExtractionValidator.normalize(payload: heuristicCanonical)
         let normalizedHeuristicLegacy = KnowledgeValidator.normalize(
             payload: StructuredKnowledge.fromCanonicalExtraction(
                 normalizedHeuristicCanonical,
                 title: noteTitle,
-                sourceSignature: structure.sourceSignature,
+                sourceSignature: chunkSourceID,
                 sourceType: strategy.rawValue,
                 approximateTokenCount: structure.complexity.tokenEstimate,
                 sectionCount: structure.sections.count,
@@ -539,7 +552,7 @@ final class KnowledgeExtractionEngine {
                 let legacyPayload = StructuredKnowledge.fromCanonicalExtraction(
                     normalizedCanonical,
                     title: noteTitle,
-                    sourceSignature: structure.sourceSignature,
+                    sourceSignature: chunkSourceID,
                     sourceType: strategy.rawValue,
                     approximateTokenCount: structure.complexity.tokenEstimate,
                     sectionCount: structure.sections.count,
@@ -575,7 +588,7 @@ final class KnowledgeExtractionEngine {
                             let retryLegacy = StructuredKnowledge.fromCanonicalExtraction(
                                 normalizedRetry,
                                 title: noteTitle,
-                                sourceSignature: structure.sourceSignature,
+                                sourceSignature: chunkSourceID,
                                 sourceType: strategy.rawValue,
                                 approximateTokenCount: structure.complexity.tokenEstimate,
                                 sectionCount: structure.sections.count,
@@ -1347,11 +1360,11 @@ final class KnowledgeExtractionEngine {
 
     private func sentenceMatchesConcept(_ sentence: String, concept: String, aliases: [String]) -> Bool {
         let normalizedSentence = normalizeConceptKey(sentence)
-        if normalizedSentence.contains(normalizeConceptKey(concept)) {
+        if normalizedSentence.containsConceptKey(normalizeConceptKey(concept)) {
             return true
         }
         return aliases.contains(where: { alias in
-            normalizedSentence.contains(normalizeConceptKey(alias))
+            normalizedSentence.containsConceptKey(normalizeConceptKey(alias))
         })
     }
 
@@ -1889,11 +1902,46 @@ final class KnowledgeExtractionPipeline {
         )
     }
 
+    func extractKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> KnowledgeExtractionResult {
+        let run = await engine.extractRun(from: structure, notebookText: notebookText)
+        return KnowledgeExtractionResult(
+            structuredKnowledge: run.knowledge,
+            canonicalExtraction: run.canonicalExtraction,
+            snapshot: run.knowledge.legacySnapshotRepresentation(),
+            strategy: run.strategy,
+            fromCache: run.fromCache,
+            structure: run.structure,
+            qualityMetrics: run.qualityMetrics,
+            debugReport: run.debugReport
+        )
+    }
+
     func normalizedSignature(noteTitle: String, noteText: String, notebookText: String = "") -> String {
         engine.normalizedSignature(noteTitle: noteTitle, noteText: noteText, notebookText: notebookText)
     }
 
     func clearCache() {
         engine.clearCache()
+    }
+}
+
+private extension String {
+    func containsConceptKey(_ conceptKey: String) -> Bool {
+        let sentenceTokens = split(separator: " ").map(String.init)
+        let conceptTokens = conceptKey.split(separator: " ").map(String.init)
+        guard !conceptTokens.isEmpty, sentenceTokens.count >= conceptTokens.count else { return false }
+
+        for startIndex in 0...(sentenceTokens.count - conceptTokens.count) {
+            let window = sentenceTokens[startIndex..<(startIndex + conceptTokens.count)]
+            if zip(window, conceptTokens).allSatisfy({ sentenceToken, conceptToken in
+                sentenceToken == conceptToken
+                    || sentenceToken == "\(conceptToken)s"
+                    || conceptToken == "\(sentenceToken)s"
+            }) {
+                return true
+            }
+        }
+
+        return false
     }
 }

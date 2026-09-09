@@ -60,6 +60,41 @@ final class StructureDetector: StructureDetecting {
                 continue
             }
 
+            if isEquationLine(trimmed) {
+                let startLine = index
+                var contentLines: [String] = [line]
+                var equations: [String] = [trimmed]
+                index += 1
+                while index < lines.count {
+                    let next = lines[index]
+                    let nextTrimmed = next.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard isEquationLine(nextTrimmed) else { break }
+                    contentLines.append(next)
+                    equations.append(nextTrimmed)
+                    index += 1
+                }
+
+                blocks.append(
+                    DocumentBlock(
+                        id: blockID(kind: .equation, startLine: startLine, endLine: max(startLine, index - 1)),
+                        kind: .equation,
+                        content: contentLines.joined(separator: "\n"),
+                        normalizedContent: equations.joined(separator: "\n"),
+                        startLine: startLine,
+                        endLine: max(startLine, index - 1),
+                        headingLevel: nil,
+                        listStyle: nil,
+                        listItems: [],
+                        tableRows: [],
+                        codeLanguage: nil,
+                        equation: equations.first,
+                        quoteLevel: 0,
+                        sectionID: nil
+                    )
+                )
+                continue
+            }
+
             if let heading = headingMatch(for: trimmed) {
                 blocks.append(
                     DocumentBlock(
@@ -181,41 +216,6 @@ final class StructureDetector: StructureDetecting {
                         tableRows: rows,
                         codeLanguage: nil,
                         equation: nil,
-                        quoteLevel: 0,
-                        sectionID: nil
-                    )
-                )
-                continue
-            }
-
-            if isEquationLine(trimmed) {
-                let startLine = index
-                var contentLines: [String] = [line]
-                var equations: [String] = [trimmed]
-                index += 1
-                while index < lines.count {
-                    let next = lines[index]
-                    let nextTrimmed = next.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard isEquationLine(nextTrimmed) else { break }
-                    contentLines.append(next)
-                    equations.append(nextTrimmed)
-                    index += 1
-                }
-
-                blocks.append(
-                    DocumentBlock(
-                        id: blockID(kind: .equation, startLine: startLine, endLine: max(startLine, index - 1)),
-                        kind: .equation,
-                        content: contentLines.joined(separator: "\n"),
-                        normalizedContent: equations.joined(separator: "\n"),
-                        startLine: startLine,
-                        endLine: max(startLine, index - 1),
-                        headingLevel: nil,
-                        listStyle: nil,
-                        listItems: [],
-                        tableRows: [],
-                        codeLanguage: nil,
-                        equation: equations.first,
                         quoteLevel: 0,
                         sectionID: nil
                     )
