@@ -14,12 +14,17 @@ struct KnowledgeContext: Codable, Equatable, Sendable {
     var studentConcepts: [StudentConceptRecord]
     var recentReviewHistory: [ReviewEvent]
     var tutorContext: TutorContext
+    var graphContext: GraphContext?
 
     var knowledgeJSON: String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(self) else { return "{}" }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    func graphPromptRepresentation() -> String {
+        graphContext?.graphPromptRepresentation() ?? ""
     }
 }
 
@@ -158,17 +163,20 @@ final class ContextBuilder {
     private let studyRepository: StudyRepository
     private let studentConceptService: StudentConceptService
     private let hybridRetriever: HybridRetriever
+    private let graphContextBuilder: GraphContextBuilder
 
     init(
         knowledgeRepository: KnowledgeRepository = .shared,
         studyRepository: StudyRepository = .shared,
         studentConceptService: StudentConceptService = .shared,
-        hybridRetriever: HybridRetriever = .shared
+        hybridRetriever: HybridRetriever = .shared,
+        graphContextBuilder: GraphContextBuilder? = nil
     ) {
         self.knowledgeRepository = knowledgeRepository
         self.studyRepository = studyRepository
         self.studentConceptService = studentConceptService
         self.hybridRetriever = hybridRetriever
+        self.graphContextBuilder = graphContextBuilder ?? GraphContextBuilder(repository: knowledgeRepository)
     }
 
     func build(noteID: UUID? = nil, title: String, text: String) -> KnowledgeContext {
@@ -227,12 +235,15 @@ final class ContextBuilder {
         let relationships = deduplicateRelationships(conceptRecords.flatMap { concept in
             (try? knowledgeRepository.relationships(containing: concept.id, limit: 6)) ?? []
         })
+        let graphContext = graphContextBuilder.buildContext(query: query.isEmpty ? title : query)
+        let graphConcepts = mergeConcepts(conceptRecords, graphContext.concepts)
+        let graphRelationships = deduplicateRelationships(relationships + graphContext.relationships)
 
         let retrievalSources = deduplicateSources(retrievalResults.flatMap { $0.sources })
         let mastery = noteID.flatMap { try? studyRepository.studentConcepts(for: $0) }
             ?? (try? studentConceptService.recentlyReviewedConcepts(limit: 6)) ?? []
         let recentReviewHistory = noteID.flatMap { try? studyRepository.reviewEvents(for: $0) } ?? []
-        let conceptTitleByID = Dictionary(uniqueKeysWithValues: conceptRecords.map { ($0.id, $0.canonicalName) })
+        let conceptTitleByID = Dictionary(uniqueKeysWithValues: graphConcepts.map { ($0.id, $0.canonicalName) })
         let tutorContext = TutorContext(
             noteID: noteID,
             noteTitle: title,
@@ -261,14 +272,15 @@ final class ContextBuilder {
             notePreview: preview,
             retrievedNotes: noteResults,
             retrievedChunks: retrievedChunks,
-            concepts: conceptRecords,
-            relationships: relationships,
-            relatedConcepts: conceptRecords,
+            concepts: graphConcepts,
+            relationships: graphRelationships,
+            relatedConcepts: graphContext.concepts,
             retrievalSources: Array(retrievalSources.prefix(16)),
             citations: Array(citations.prefix(16)),
             studentConcepts: mastery,
             recentReviewHistory: recentReviewHistory.prefix(12).map { $0 },
-            tutorContext: tutorContext
+            tutorContext: tutorContext,
+            graphContext: graphContext
         )
     }
 
@@ -283,6 +295,13 @@ final class ContextBuilder {
         var seen: Set<String> = []
         return relationships.filter { relationship in
             seen.insert(relationship.id).inserted
+        }
+    }
+
+    private func mergeConcepts(_ primary: [CanonicalConceptRecord], _ secondary: [CanonicalConceptRecord]) -> [CanonicalConceptRecord] {
+        var seen: Set<String> = []
+        return (primary + secondary).filter { concept in
+            seen.insert(concept.id).inserted
         }
     }
 }

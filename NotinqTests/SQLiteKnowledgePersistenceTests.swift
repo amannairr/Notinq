@@ -6,6 +6,7 @@ final class SQLiteKnowledgePersistenceTests: XCTestCase {
     private let migrationKey = "notinq.sqlite.legacyNotesMigrated"
     private var databaseURL: URL!
     private var database: SQLiteDatabase!
+    private var migrationManager: MigrationManager!
     private var studyRepository: StudyRepository!
     private var noteRepository: NoteRepository!
     private var knowledgeRepository: KnowledgeRepository!
@@ -23,8 +24,14 @@ final class SQLiteKnowledgePersistenceTests: XCTestCase {
             .appendingPathExtension("sqlite")
 
         database = try SQLiteDatabase(url: databaseURL)
+        migrationManager = MigrationManager(legacyNotesURL: legacyNotesURL)
         studyRepository = StudyRepository(database: database)
-        noteRepository = NoteRepository(database: database, studyRepository: studyRepository, performMigration: false)
+        noteRepository = NoteRepository(
+            database: database,
+            migrationManager: migrationManager,
+            studyRepository: studyRepository,
+            performMigration: false
+        )
         knowledgeRepository = KnowledgeRepository(database: database)
         syncService = TestKnowledgeSyncService(database: database)
         noteService = NoteService(repository: noteRepository, knowledgeService: syncService)
@@ -44,6 +51,7 @@ final class SQLiteKnowledgePersistenceTests: XCTestCase {
         knowledgeRepository = nil
         noteRepository = nil
         studyRepository = nil
+        migrationManager = nil
         database = nil
         noteService = nil
         syncService = nil
@@ -66,7 +74,7 @@ final class SQLiteKnowledgePersistenceTests: XCTestCase {
         let folder = NoteFolder(title: "Biology", notes: [note])
         try writeLegacyPayload(folders: [folder])
 
-        try MigrationManager.shared.migrateIfNeeded(database: database)
+        try migrationManager.migrateIfNeeded(database: database)
 
         let loadedFolders = try noteRepository.loadFolders()
         XCTAssertEqual(loadedFolders.count, 1)
@@ -492,8 +500,164 @@ final class SQLiteKnowledgePersistenceTests: XCTestCase {
         XCTAssertEqual(context.tutorContext.explanationStyle, "advanced")
     }
 
+    func testCanonicalConceptResolutionMergesAliasesAcrossNotes() throws {
+        let noteA = makeNote(title: "ATP", content: "ATP stores energy.")
+        let noteB = makeNote(title: "Adenosine Triphosphate", content: "Adenosine Triphosphate is abbreviated ATP.")
+        try noteRepository.saveFolders([NoteFolder(title: "Biology", notes: [noteA, noteB])])
+
+        try persistKnowledge(
+            note: noteA,
+            concepts: [
+                makeConcept(id: "concept-atp", name: "ATP", definition: "Cellular energy currency.", aliases: ["Adenosine Triphosphate"])
+            ],
+            relationships: []
+        )
+        try persistKnowledge(
+            note: noteB,
+            concepts: [
+                makeConcept(id: "concept-adenosine-triphosphate", name: "adenosine-triphosphate", definition: "The expanded name for ATP.", aliases: ["ATP"])
+            ],
+            relationships: []
+        )
+
+        let first = try knowledgeRepository.concepts(for: noteA.id)
+        let second = try knowledgeRepository.concepts(for: noteB.id)
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(second.count, 1)
+        XCTAssertEqual(first.first?.id, second.first?.id)
+
+        let canonical = try knowledgeRepository.canonicalConcept(named: "Adenosine Triphosphate", aliases: ["adenosine-triphosphate"])
+        XCTAssertEqual(canonical?.id, first.first?.id)
+        XCTAssertTrue(canonical?.aliases.contains("ATP") ?? false)
+    }
+
+    func testCrossNoteGraphTraversalAndRetrievalStitchCanonicalConcepts() throws {
+        let energyNote = makeNote(title: "ATP Energy", content: "ATP depends on mitochondria for cellular energy.")
+        let organelleNote = makeNote(title: "Mitochondria Organelles", content: "Mitochondria are organelles.")
+        try noteRepository.saveFolders([NoteFolder(title: "Biology", notes: [energyNote, organelleNote])])
+
+        let atp = makeConcept(id: "concept-atp", name: "ATP", definition: "Energy currency.", aliases: ["Adenosine Triphosphate"])
+        let mitochondria = makeConcept(id: "concept-mitochondria", name: "Mitochondria", definition: "Energy-producing cell structures.")
+        try persistKnowledge(
+            note: energyNote,
+            concepts: [atp, mitochondria],
+            relationships: [
+                makeRelationship(id: "relationship-atp-mitochondria", sourceID: atp.id, targetID: mitochondria.id, kind: .requires)
+            ]
+        )
+
+        let mitochondriaAgain = makeConcept(id: "concept-mitochondria-other", name: "mitochondria", definition: "Organelles involved in ATP production.", aliases: ["Mitochondria"])
+        let organelle = makeConcept(id: "concept-organelle", name: "Organelle", definition: "Specialized cell structure.")
+        try persistKnowledge(
+            note: organelleNote,
+            concepts: [mitochondriaAgain, organelle],
+            relationships: [
+                makeRelationship(id: "relationship-mitochondria-organelle", sourceID: mitochondriaAgain.id, targetID: organelle.id, kind: .partOf)
+            ]
+        )
+
+        let atpID = try XCTUnwrap(try knowledgeRepository.canonicalConcept(named: "ATP")?.id)
+        let mitochondriaID = try XCTUnwrap(try knowledgeRepository.canonicalConcept(named: "Mitochondria")?.id)
+        let organelleID = try XCTUnwrap(try knowledgeRepository.canonicalConcept(named: "Organelle")?.id)
+
+        XCTAssertEqual(try knowledgeRepository.concepts(for: energyNote.id).first { $0.canonicalName == "Mitochondria" }?.id, mitochondriaID)
+        XCTAssertEqual(try knowledgeRepository.concepts(for: organelleNote.id).first { $0.id == mitochondriaID }?.id, mitochondriaID)
+
+        let descendants = try knowledgeRepository.descendants(of: atpID, depth: 2, limit: 10)
+        XCTAssertTrue(descendants.contains { $0.id == mitochondriaID })
+        XCTAssertTrue(descendants.contains { $0.id == organelleID })
+
+        let path = try knowledgeRepository.shortestPath(from: atpID, to: organelleID, maxDepth: 3)
+        XCTAssertEqual(path.map(\.id), [atpID, mitochondriaID, organelleID])
+
+        let graphRetriever = GraphRetriever(knowledgeRepository: knowledgeRepository, maxTraversalDepth: 2)
+        let hits = graphRetriever.retrieve(query: "ATP", limit: 12)
+        XCTAssertTrue(hits.contains { $0.title.localizedCaseInsensitiveContains("Mitochondria") })
+        XCTAssertTrue(hits.contains { $0.title.localizedCaseInsensitiveContains("Organelle") })
+    }
+
+    @MainActor
+    func testLearningEnginePrioritizesWeakPrerequisitesBeforeDependents() {
+        var atp = makeConcept(id: "concept-atp", name: "ATP", definition: "ATP stores energy.", importance: 0.95)
+        atp.relationships = ["Mitochondria"]
+        let mitochondria = makeConcept(id: "concept-mitochondria", name: "Mitochondria", definition: "Mitochondria produce ATP.", importance: 0.8)
+
+        var relationship = KnowledgeRelationship()
+        relationship.id = "relationship-atp-mitochondria"
+        relationship.sourceID = atp.id
+        relationship.targetID = mitochondria.id
+        relationship.relationKind = .requires
+        relationship.relation = KnowledgeRelationshipKind.requires.rawValue
+        relationship.confidence = 0.95
+
+        var knowledge = StructuredKnowledge(title: "Cell Energy")
+        knowledge.concepts = [atp, mitochondria]
+        knowledge.relationships = [relationship]
+
+        var existing = NoteStudyData()
+        existing.learningMemory = [
+            StudyMemoryEntry(concept: "Mitochondria", masteredCount: 0, missedCount: 3),
+            StudyMemoryEntry(concept: "ATP", masteredCount: 3, missedCount: 0)
+        ]
+
+        let generated = LearningEngine.shared.generateStudyData(from: knowledge, existingStudyData: existing)
+        XCTAssertEqual(generated.flashcards.first?.front, "Mitochondria")
+        XCTAssertEqual(generated.learningInsights.reviewPriority.first?.title, "Mitochondria")
+        XCTAssertTrue(generated.notebookKnowledgeGaps.contains { $0.title == "Mitochondria" })
+        XCTAssertTrue(generated.examPrep.difficultConcepts.contains("Mitochondria"))
+    }
+
     private func makeNote(title: String, content: String, studyData: NoteStudyData = NoteStudyData()) -> NoteFile {
         NoteFile(title: title, content: content, studyData: studyData)
+    }
+
+    private func makeConcept(
+        id: String,
+        name: String,
+        definition: String,
+        aliases: [String] = [],
+        importance: Double = 0.8,
+        confidence: Double = 0.9
+    ) -> KnowledgeConcept {
+        var concept = KnowledgeConcept()
+        concept.id = id
+        concept.name = name
+        concept.definition = definition
+        concept.aliases = aliases
+        concept.importance = importance
+        concept.confidence = confidence
+        concept.category = "concept"
+        return concept
+    }
+
+    private func makeRelationship(id: String, sourceID: String, targetID: String, kind: KnowledgeRelationshipKind) -> KnowledgeRelationship {
+        var relationship = KnowledgeRelationship()
+        relationship.id = id
+        relationship.sourceID = sourceID
+        relationship.targetID = targetID
+        relationship.relationKind = kind
+        relationship.relation = kind.rawValue
+        relationship.confidence = 0.9
+        return relationship
+    }
+
+    private func persistKnowledge(note: NoteFile, concepts: [KnowledgeConcept], relationships: [KnowledgeRelationship]) throws {
+        let structure = DocumentPreprocessor.shared.preprocess(title: note.title, text: note.content)
+        let chunks = SemanticChunker.shared.chunk(
+            title: note.title,
+            structure: structure,
+            contextLimit: Int(AIRuntimeConfig.current.llama.contextSize)
+        )
+        var extraction = StructuredKnowledge(title: note.title)
+        extraction.concepts = concepts
+        extraction.relationships = relationships
+        try knowledgeRepository.persist(
+            noteID: note.id,
+            noteTitle: note.title,
+            noteContent: note.content,
+            chunks: chunks,
+            extraction: extraction
+        )
     }
 
     private func makeStudyData() -> NoteStudyData {
@@ -532,10 +696,9 @@ final class SQLiteKnowledgePersistenceTests: XCTestCase {
     }
 
     private var legacyNotesURL: URL {
-        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let baseURL = databaseURL.deletingPathExtension()
+            .appendingPathExtension("legacy")
         return baseURL
-            .appendingPathComponent("Notinq", isDirectory: true)
             .appendingPathComponent("lumora-notes.json", isDirectory: false)
     }
 

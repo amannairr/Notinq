@@ -11,6 +11,7 @@ import AppKit
 struct MainContainerView: View {
 
     @ObservedObject var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var studyPanelWidth: CGFloat = 410
 
     // Panel widths
@@ -21,6 +22,7 @@ struct MainContainerView: View {
     @State private var listLastDragX: CGFloat?
     @State private var isSidebarCollapsed = false
     @State private var isNotesCollapsed = false
+    @StateObject private var onboardingViewModel = OnboardingViewModel()
 
     init(appState: AppState) {
         self.appState = appState
@@ -171,6 +173,12 @@ struct MainContainerView: View {
                                     lastUpdatedAt: currentNoteUpdatedAt
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            case .dashboard:
+                                LearningDashboardView()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            case .graph:
+                                KnowledgeGraphExplorerView()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             case .search:
                                 SearchView()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -180,7 +188,7 @@ struct MainContainerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .background(Color.bgEditor)
                         .shadow(color: .black.opacity(0.045), radius: 22, x: -10, y: 0)
-                        .animation(.easeInOut(duration: 0.15), value: appState.selectedMode)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: appState.selectedMode)
                         .overlay(alignment: .trailing) {
                             if appState.isLearningInsightsOpen, let currentNoteID {
                                 Color.black.opacity(0.18)
@@ -229,6 +237,12 @@ struct MainContainerView: View {
                         .environmentObject(appState)
                         .transition(.opacity)
                         .zIndex(10)
+                }
+
+                if !onboardingViewModel.isCompleted {
+                    OnboardingView(viewModel: onboardingViewModel)
+                        .transition(.opacity)
+                        .zIndex(30)
                 }
 
             }

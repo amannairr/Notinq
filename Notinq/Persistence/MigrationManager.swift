@@ -3,10 +3,19 @@ import Foundation
 final class MigrationManager {
     static let shared = MigrationManager()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let migrationKey = "notinq.sqlite.legacyNotesMigrated"
+    private let legacyNotesURLProvider: () -> URL
 
-    private init() {}
+    init(
+        defaults: UserDefaults = .standard,
+        legacyNotesURL: URL? = nil
+    ) {
+        self.defaults = defaults
+        self.legacyNotesURLProvider = {
+            legacyNotesURL ?? Self.defaultLegacyNotesURL()
+        }
+    }
 
     func migrateIfNeeded(database: SQLiteDatabase) throws {
         guard defaults.bool(forKey: migrationKey) == false else { return }
@@ -45,6 +54,10 @@ final class MigrationManager {
     }
 
     private func legacyNotesURL() -> URL {
+        legacyNotesURLProvider()
+    }
+
+    private static func defaultLegacyNotesURL() -> URL {
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return baseURL

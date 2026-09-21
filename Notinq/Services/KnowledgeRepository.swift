@@ -100,7 +100,13 @@ final class KnowledgeRepository {
     func concepts(for noteID: UUID) throws -> [CanonicalConceptRecord] {
         try queue.sync {
             let rows = try database.fetch(
-                "SELECT id, canonical_name, description, confidence FROM concepts WHERE source_note_id = ? ORDER BY confidence DESC, canonical_name ASC",
+                """
+                SELECT c.id, c.canonical_name, c.description, nc.confidence
+                FROM note_concepts nc
+                JOIN concepts c ON c.id = nc.concept_id
+                WHERE nc.note_id = ?
+                ORDER BY nc.confidence DESC, c.canonical_name ASC
+                """,
                 bindings: [.text(noteID.uuidString)]
             )
 
@@ -149,6 +155,9 @@ final class KnowledgeRepository {
         guard !trimmed.isEmpty else {
             return try recentChunks(limit: limit)
         }
+        guard let ftsQuery = Self.ftsQuery(from: trimmed) else {
+            return try recentChunks(limit: limit)
+        }
 
         return try queue.sync {
             let rows = try database.fetch(
@@ -161,7 +170,7 @@ final class KnowledgeRepository {
                 ORDER BY rank ASC
                 LIMIT ?
                 """,
-                bindings: [.text(trimmed), .integer(Int64(limit))]
+                bindings: [.text(ftsQuery), .integer(Int64(limit))]
             )
 
             return rows.compactMap { row in
@@ -191,6 +200,9 @@ final class KnowledgeRepository {
         guard !trimmed.isEmpty else {
             return try recentConcepts(limit: limit)
         }
+        guard let ftsQuery = Self.ftsQuery(from: trimmed) else {
+            return try recentConcepts(limit: limit)
+        }
 
         return try queue.sync {
             let rows = try database.fetch(
@@ -202,7 +214,7 @@ final class KnowledgeRepository {
                 ORDER BY rank ASC
                 LIMIT ?
                 """,
-                bindings: [.text(trimmed), .integer(Int64(limit))]
+                bindings: [.text(ftsQuery), .integer(Int64(limit))]
             )
 
             return rows.compactMap { row in
@@ -261,21 +273,45 @@ final class KnowledgeRepository {
     func concept(for conceptID: String) throws -> CanonicalConceptRecord? {
         try queue.sync {
             let rows = try database.fetch(
-                "SELECT id, canonical_name, description, confidence, source_note_id FROM concepts WHERE id = ? LIMIT 1",
+                "SELECT id, canonical_name, description, confidence FROM concepts WHERE id = ? LIMIT 1",
                 bindings: [.text(conceptID)]
             )
             guard let row = rows.first, let id = row.string("id"), let canonicalName = row.string("canonical_name") else {
                 return nil
             }
 
-            let noteID = UUID(uuidString: row.string("source_note_id") ?? "")
             return CanonicalConceptRecord(
                 id: id,
                 canonicalName: canonicalName,
                 aliases: (try? aliasesForConceptID(id)) ?? [],
-                sourceReferences: noteID.map { [$0.uuidString] } ?? [],
+                sourceReferences: (try? noteIDsForConceptID(id).map(\.uuidString)) ?? [],
                 confidence: row.double("confidence") ?? 0,
                 description: row.string("description") ?? ""
+            )
+        }
+    }
+
+    func canonicalConcept(named name: String, aliases: [String] = []) throws -> CanonicalConcept? {
+        try queue.sync {
+            guard let id = try resolveExistingCanonicalConceptID(name: name, aliases: aliases) else {
+                return nil
+            }
+            let rows = try database.fetch(
+                "SELECT id, canonical_name, aliases_json, created_at, updated_at FROM canonical_concepts WHERE id = ? LIMIT 1",
+                bindings: [.text(id)]
+            )
+            guard let row = rows.first,
+                  let conceptID = row.string("id"),
+                  let canonicalName = row.string("canonical_name")
+            else {
+                return nil
+            }
+            return CanonicalConcept(
+                id: conceptID,
+                canonicalName: canonicalName,
+                aliases: Self.decodeStringArray(row.string("aliases_json")),
+                createdAt: Self.date(from: row.string("created_at")) ?? Date(),
+                updatedAt: Self.date(from: row.string("updated_at")) ?? Date()
             )
         }
     }
@@ -311,6 +347,153 @@ final class KnowledgeRepository {
                 )
             }
         }
+    }
+
+    func neighbors(of conceptID: String, limit: Int = 20) throws -> [CanonicalConceptRecord] {
+        try relatedConcepts(of: conceptID, depth: 1, limit: limit)
+    }
+
+    func ancestors(of conceptID: String, depth: Int = 3, limit: Int = 32) throws -> [CanonicalConceptRecord] {
+        try traverse(from: conceptID, direction: .incoming, depth: depth, limit: limit)
+    }
+
+    func descendants(of conceptID: String, depth: Int = 3, limit: Int = 32) throws -> [CanonicalConceptRecord] {
+        try traverse(from: conceptID, direction: .outgoing, depth: depth, limit: limit)
+    }
+
+    func relatedConcepts(of conceptID: String, depth: Int = 2, limit: Int = 32) throws -> [CanonicalConceptRecord] {
+        try traverse(from: conceptID, direction: .both, depth: depth, limit: limit)
+    }
+
+    func shortestPath(from sourceConceptID: String, to targetConceptID: String, maxDepth: Int = 5) throws -> [CanonicalConceptRecord] {
+        try queue.sync {
+            let boundedDepth = max(0, min(maxDepth, 8))
+            guard !sourceConceptID.isEmpty, !targetConceptID.isEmpty else { return [] }
+            if sourceConceptID == targetConceptID {
+                return try conceptRecord(for: sourceConceptID).map { [$0] } ?? []
+            }
+
+            var queueItems: [(id: String, path: [String])] = [(sourceConceptID, [sourceConceptID])]
+            var visited: Set<String> = [sourceConceptID]
+
+            while !queueItems.isEmpty {
+                let item = queueItems.removeFirst()
+                guard item.path.count <= boundedDepth + 1 else { continue }
+                let edges = try relationshipsTouching(conceptID: item.id, limit: 64)
+                for edge in edges {
+                    let nextID = edge.sourceConceptID == item.id ? edge.targetConceptID : edge.sourceConceptID
+                    guard visited.insert(nextID).inserted else { continue }
+                    let nextPath = item.path + [nextID]
+                    if nextID == targetConceptID {
+                        return try nextPath.compactMap { try conceptRecord(for: $0) }
+                    }
+                    queueItems.append((nextID, nextPath))
+                }
+            }
+
+            return []
+        }
+    }
+
+    private enum TraversalDirection {
+        case incoming
+        case outgoing
+        case both
+    }
+
+    private func traverse(from conceptID: String, direction: TraversalDirection, depth: Int, limit: Int) throws -> [CanonicalConceptRecord] {
+        try queue.sync {
+            let boundedDepth = max(0, min(depth, 8))
+            let boundedLimit = max(0, min(limit, 128))
+            guard boundedDepth > 0, boundedLimit > 0, !conceptID.isEmpty else { return [] }
+
+            var resultIDs: [String] = []
+            var visited: Set<String> = [conceptID]
+            var frontier: [(id: String, distance: Int)] = [(conceptID, 0)]
+
+            while !frontier.isEmpty && resultIDs.count < boundedLimit {
+                let current = frontier.removeFirst()
+                guard current.distance < boundedDepth else { continue }
+
+                let relationships = try relationshipsTouching(conceptID: current.id, limit: 64)
+                for relationship in relationships {
+                    let nextID: String?
+                    switch direction {
+                    case .incoming:
+                        nextID = relationship.targetConceptID == current.id ? relationship.sourceConceptID : nil
+                    case .outgoing:
+                        nextID = relationship.sourceConceptID == current.id ? relationship.targetConceptID : nil
+                    case .both:
+                        if relationship.sourceConceptID == current.id {
+                            nextID = relationship.targetConceptID
+                        } else if relationship.targetConceptID == current.id {
+                            nextID = relationship.sourceConceptID
+                        } else {
+                            nextID = nil
+                        }
+                    }
+
+                    guard let nextID, visited.insert(nextID).inserted else { continue }
+                    resultIDs.append(nextID)
+                    if resultIDs.count >= boundedLimit { break }
+                    frontier.append((nextID, current.distance + 1))
+                }
+            }
+
+            return try resultIDs.compactMap { try conceptRecord(for: $0) }
+        }
+    }
+
+    private func relationshipsTouching(conceptID: String, limit: Int) throws -> [KnowledgeRelationshipRecord] {
+        let rows = try database.fetch(
+            """
+            SELECT id, source_concept_id, target_concept_id, relation_type, confidence, provenance_json
+            FROM relationships
+            WHERE source_concept_id = ? OR target_concept_id = ?
+            ORDER BY confidence DESC
+            LIMIT ?
+            """,
+            bindings: [.text(conceptID), .text(conceptID), .integer(Int64(limit))]
+        )
+        return rows.compactMap { row in
+            guard
+                let id = row.string("id"),
+                let source = row.string("source_concept_id"),
+                let target = row.string("target_concept_id"),
+                let relationType = row.string("relation_type")
+            else { return nil }
+
+            return KnowledgeRelationshipRecord(
+                id: id,
+                sourceConceptID: source,
+                targetConceptID: target,
+                relationType: relationType,
+                confidence: row.double("confidence") ?? 0,
+                provenance: Self.decodeStringArray(row.string("provenance_json"))
+            )
+        }
+    }
+
+    private func conceptRecord(for conceptID: String) throws -> CanonicalConceptRecord? {
+        let rows = try database.fetch(
+            "SELECT id, canonical_name, description, confidence FROM concepts WHERE id = ? LIMIT 1",
+            bindings: [.text(conceptID)]
+        )
+        guard let row = rows.first,
+              let id = row.string("id"),
+              let canonicalName = row.string("canonical_name")
+        else {
+            return nil
+        }
+
+        return CanonicalConceptRecord(
+            id: id,
+            canonicalName: canonicalName,
+            aliases: (try? aliasesForConceptID(id)) ?? [],
+            sourceReferences: (try? noteIDsForConceptID(id).map(\.uuidString)) ?? [],
+            confidence: row.double("confidence") ?? 0,
+            description: row.string("description") ?? ""
+        )
     }
 
     private func createSchemaIfNeeded() throws {
@@ -357,6 +540,27 @@ final class KnowledgeRepository {
         """)
 
         try database.execute("""
+        CREATE TABLE IF NOT EXISTS canonical_concepts (
+            id TEXT PRIMARY KEY NOT NULL,
+            canonical_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            aliases_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """)
+
+        try database.execute("""
+        CREATE TABLE IF NOT EXISTS canonical_concept_aliases (
+            normalized_alias TEXT PRIMARY KEY NOT NULL,
+            concept_id TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(concept_id) REFERENCES canonical_concepts(id) ON DELETE CASCADE
+        )
+        """)
+
+        try database.execute("""
         CREATE TABLE IF NOT EXISTS concept_aliases (
             id TEXT PRIMARY KEY NOT NULL,
             note_id TEXT NOT NULL,
@@ -376,7 +580,7 @@ final class KnowledgeRepository {
             provenance_json TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY (note_id, concept_id),
             FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE,
-            FOREIGN KEY(concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+            FOREIGN KEY(concept_id) REFERENCES canonical_concepts(id) ON DELETE CASCADE
         )
         """)
 
@@ -389,8 +593,8 @@ final class KnowledgeRepository {
             relation_type TEXT NOT NULL,
             confidence REAL NOT NULL DEFAULT 0.0,
             provenance_json TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY(source_concept_id) REFERENCES concepts(id) ON DELETE CASCADE,
-            FOREIGN KEY(target_concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+            FOREIGN KEY(source_concept_id) REFERENCES canonical_concepts(id) ON DELETE CASCADE,
+            FOREIGN KEY(target_concept_id) REFERENCES canonical_concepts(id) ON DELETE CASCADE
         )
         """)
 
@@ -412,6 +616,87 @@ final class KnowledgeRepository {
             aliases
         )
         """)
+
+        try database.transaction {
+            try backfillCanonicalConceptsIfNeeded()
+        }
+    }
+
+    private func backfillCanonicalConceptsIfNeeded() throws {
+        let conceptRows = try database.fetch(
+            """
+            SELECT id, source_note_id, canonical_name, description, confidence, created_at, updated_at, provenance_json
+            FROM concepts
+            ORDER BY created_at ASC, canonical_name ASC
+            """
+        )
+        guard conceptRows.isEmpty == false else { return }
+
+        let timestamp = Self.string(from: Date())
+        for row in conceptRows {
+            guard
+                let existingID = row.string("id"),
+                let name = row.string("canonical_name")
+            else { continue }
+
+            let aliasRows = try database.fetch(
+                "SELECT alias FROM concept_aliases WHERE concept_id = ?",
+                bindings: [.text(existingID)]
+            )
+            let aliases = aliasRows.compactMap { $0.string("alias") }
+            let canonicalID = try resolveOrCreateCanonicalConcept(
+                preferredID: existingID,
+                name: name,
+                aliases: aliases,
+                timestamp: timestamp
+            )
+
+            if let noteID = row.string("source_note_id") {
+                try database.execute(
+                    """
+                    INSERT OR IGNORE INTO note_concepts (note_id, concept_id, concept_title, confidence, provenance_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    bindings: [
+                        .text(noteID),
+                        .text(canonicalID),
+                        .text(name),
+                        .real(row.double("confidence") ?? 0),
+                        .text(row.string("provenance_json") ?? "{}")
+                    ]
+                )
+            }
+
+            try database.execute(
+                """
+                INSERT OR IGNORE INTO concepts (
+                    id, source_note_id, canonical_name, description, confidence, created_at, updated_at, provenance_json
+                )
+                SELECT ?, source_note_id, canonical_name, description, confidence, created_at, updated_at, provenance_json
+                FROM concepts
+                WHERE id = ?
+                """,
+                bindings: [.text(canonicalID), .text(existingID)]
+            )
+
+            guard canonicalID != existingID else { continue }
+
+            try database.execute(
+                """
+                INSERT OR REPLACE INTO note_concepts (note_id, concept_id, concept_title, confidence, provenance_json)
+                SELECT note_id, ?, concept_title, confidence, provenance_json
+                FROM note_concepts
+                WHERE concept_id = ?
+                """,
+                bindings: [.text(canonicalID), .text(existingID)]
+            )
+            try database.execute("DELETE FROM note_concepts WHERE concept_id = ?", bindings: [.text(existingID)])
+            try database.execute("UPDATE concept_aliases SET concept_id = ? WHERE concept_id = ?", bindings: [.text(canonicalID), .text(existingID)])
+            try database.execute("UPDATE relationships SET source_concept_id = ? WHERE source_concept_id = ?", bindings: [.text(canonicalID), .text(existingID)])
+            try database.execute("UPDATE relationships SET target_concept_id = ? WHERE target_concept_id = ?", bindings: [.text(canonicalID), .text(existingID)])
+        }
+
+        try deleteOrphanedConcepts()
     }
 
     private func deleteExistingData(noteID: UUID) throws {
@@ -420,7 +705,7 @@ final class KnowledgeRepository {
         try database.execute("DELETE FROM note_concepts WHERE note_id = ?", bindings: [.text(noteIDString)])
         try database.execute("DELETE FROM concept_aliases WHERE note_id = ?", bindings: [.text(noteIDString)])
         try database.execute("DELETE FROM relationships WHERE source_note_id = ?", bindings: [.text(noteIDString)])
-        try database.execute("DELETE FROM concepts WHERE source_note_id = ?", bindings: [.text(noteIDString)])
+        try deleteOrphanedConcepts()
         try database.execute("DELETE FROM documents WHERE note_id = ?", bindings: [.text(noteIDString)])
     }
 
@@ -469,27 +754,24 @@ final class KnowledgeRepository {
         try database.execute("DELETE FROM note_concepts WHERE note_id = ?", bindings: [.text(noteID.uuidString)])
         try database.execute("DELETE FROM concept_aliases WHERE note_id = ?", bindings: [.text(noteID.uuidString)])
         try database.execute("DELETE FROM relationships WHERE source_note_id = ?", bindings: [.text(noteID.uuidString)])
-        try database.execute("DELETE FROM concepts WHERE source_note_id = ?", bindings: [.text(noteID.uuidString)])
+        try deleteOrphanedConcepts()
 
+        var conceptIDByExtractedID: [String: String] = [:]
         for concept in extraction.concepts {
-            let conceptID = concept.id.isEmpty ? UUID().uuidString : concept.id
-            try database.execute(
-                "INSERT INTO concepts (id, source_note_id, canonical_name, description, confidence, created_at, updated_at, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                bindings: [
-                    .text(conceptID),
-                    .text(noteID.uuidString),
-                    .text(concept.name),
-                    .text(concept.definition),
-                    .real(concept.confidence),
-                    .text(timestamp),
-                    .text(timestamp),
-                    .text(Self.encodeDictionary([
-                        "noteID": noteID.uuidString,
-                        "section": concept.section,
-                        "source": concept.source,
-                        "category": concept.category
-                    ]))
-                ]
+            let conceptID = try resolveOrCreateCanonicalConcept(
+                preferredID: concept.id,
+                name: concept.name,
+                aliases: concept.aliases,
+                timestamp: timestamp
+            )
+            conceptIDByExtractedID[concept.id] = conceptID
+            conceptIDByExtractedID[concept.name] = conceptID
+
+            try upsertConceptRow(
+                conceptID: conceptID,
+                noteID: noteID,
+                concept: concept,
+                timestamp: timestamp
             )
 
             try database.execute(
@@ -509,9 +791,9 @@ final class KnowledgeRepository {
 
             for alias in concept.aliases where alias.isEmpty == false {
                 try database.execute(
-                    "INSERT INTO concept_aliases (id, note_id, concept_id, alias, provenance_json) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO concept_aliases (id, note_id, concept_id, alias, provenance_json) VALUES (?, ?, ?, ?, ?)",
                     bindings: [
-                        .text(UUID().uuidString),
+                        .text(Self.stableAliasID(noteID: noteID, conceptID: conceptID, alias: alias)),
                         .text(noteID.uuidString),
                         .text(conceptID),
                         .text(alias),
@@ -527,22 +809,184 @@ final class KnowledgeRepository {
 
         for relationship in extraction.relationships {
             let relationType = relationship.relation.isEmpty ? KnowledgeRelationshipKind.relatedTo.rawValue : relationship.relation
+            let sourceID = conceptIDByExtractedID[relationship.sourceID] ?? relationship.sourceID
+            let targetID = conceptIDByExtractedID[relationship.targetID] ?? relationship.targetID
+            guard sourceID != targetID else { continue }
             try database.execute(
-                "INSERT INTO relationships (id, source_note_id, source_concept_id, target_concept_id, relation_type, confidence, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO relationships (id, source_note_id, source_concept_id, target_concept_id, relation_type, confidence, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 bindings: [
                     .text(relationship.id.isEmpty ? UUID().uuidString : relationship.id),
                     .text(noteID.uuidString),
-                    .text(relationship.sourceID),
-                    .text(relationship.targetID),
+                    .text(sourceID),
+                    .text(targetID),
                     .text(relationType),
                     .real(relationship.confidence),
                     .text(Self.encodeDictionary([
                         "noteID": noteID.uuidString,
-                        "source": relationship.sourceID,
-                        "target": relationship.targetID
+                        "source": sourceID,
+                        "target": targetID
                     ]))
                 ]
             )
+        }
+    }
+
+    private func resolveOrCreateCanonicalConcept(preferredID: String, name: String, aliases: [String], timestamp: String) throws -> String {
+        if let existingID = try resolveExistingCanonicalConceptID(name: name, aliases: aliases) {
+            try upsertCanonicalAliases(conceptID: existingID, canonicalName: name, aliases: aliases, timestamp: timestamp)
+            return existingID
+        }
+
+        let normalizedName = Self.normalizedConceptKey(name)
+        let conceptID = try availableCanonicalConceptID(preferredID: preferredID, normalizedName: normalizedName)
+        let allAliases = Self.deduplicatedAliases(name: name, aliases: aliases)
+        try database.execute(
+            "INSERT INTO canonical_concepts (id, canonical_name, normalized_name, aliases_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            bindings: [
+                .text(conceptID),
+                .text(name.trimmingCharacters(in: .whitespacesAndNewlines)),
+                .text(normalizedName),
+                .text(Self.encodeStringArray(allAliases)),
+                .text(timestamp),
+                .text(timestamp)
+            ]
+        )
+        try upsertCanonicalAliases(conceptID: conceptID, canonicalName: name, aliases: aliases, timestamp: timestamp)
+        return conceptID
+    }
+
+    private func resolveExistingCanonicalConceptID(name: String, aliases: [String]) throws -> String? {
+        let keys = Self.deduplicatedAliases(name: name, aliases: aliases).map { Self.normalizedConceptKey($0) }.filter { !$0.isEmpty }
+        for key in keys {
+            let aliasRows = try database.fetch(
+                "SELECT concept_id FROM canonical_concept_aliases WHERE normalized_alias = ? LIMIT 1",
+                bindings: [.text(key)]
+            )
+            if let conceptID = aliasRows.first?.string("concept_id") {
+                return conceptID
+            }
+
+            let conceptRows = try database.fetch(
+                "SELECT id FROM canonical_concepts WHERE normalized_name = ? LIMIT 1",
+                bindings: [.text(key)]
+            )
+            if let conceptID = conceptRows.first?.string("id") {
+                return conceptID
+            }
+        }
+        return nil
+    }
+
+    private func availableCanonicalConceptID(preferredID: String, normalizedName: String) throws -> String {
+        let trimmedPreferredID = preferredID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseID = trimmedPreferredID.isEmpty ? "concept-\(Self.identifierSlug(from: normalizedName))" : trimmedPreferredID
+        let rows = try database.fetch(
+            "SELECT normalized_name FROM canonical_concepts WHERE id = ? LIMIT 1",
+            bindings: [.text(baseID)]
+        )
+        guard let existingNormalizedName = rows.first?.string("normalized_name") else {
+            return baseID
+        }
+        if existingNormalizedName == normalizedName {
+            return baseID
+        }
+
+        var suffix = 2
+        while true {
+            let candidate = "\(baseID)-\(suffix)"
+            let candidateRows = try database.fetch(
+                "SELECT normalized_name FROM canonical_concepts WHERE id = ? LIMIT 1",
+                bindings: [.text(candidate)]
+            )
+            guard let candidateNormalizedName = candidateRows.first?.string("normalized_name") else {
+                return candidate
+            }
+            if candidateNormalizedName == normalizedName {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+
+    private func upsertCanonicalAliases(conceptID: String, canonicalName: String, aliases: [String], timestamp: String) throws {
+        let allAliases = Self.deduplicatedAliases(name: canonicalName, aliases: aliases)
+        for alias in allAliases {
+            let normalizedAlias = Self.normalizedConceptKey(alias)
+            guard !normalizedAlias.isEmpty else { continue }
+            try database.execute(
+                "INSERT OR IGNORE INTO canonical_concept_aliases (normalized_alias, concept_id, alias, created_at) VALUES (?, ?, ?, ?)",
+                bindings: [
+                    .text(normalizedAlias),
+                    .text(conceptID),
+                    .text(alias),
+                    .text(timestamp)
+                ]
+            )
+        }
+
+        let mergedAliases = Array(Set(((try? aliasesForConceptID(conceptID)) ?? []) + allAliases)).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        try database.execute(
+            "UPDATE canonical_concepts SET aliases_json = ?, updated_at = ? WHERE id = ?",
+            bindings: [
+                .text(Self.encodeStringArray(mergedAliases)),
+                .text(timestamp),
+                .text(conceptID)
+            ]
+        )
+    }
+
+    private func upsertConceptRow(conceptID: String, noteID: UUID, concept: KnowledgeConcept, timestamp: String) throws {
+        try database.execute(
+            "INSERT OR IGNORE INTO concepts (id, source_note_id, canonical_name, description, confidence, created_at, updated_at, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            bindings: [
+                .text(conceptID),
+                .text(noteID.uuidString),
+                .text(concept.name),
+                .text(concept.definition),
+                .real(concept.confidence),
+                .text(timestamp),
+                .text(timestamp),
+                .text(Self.encodeDictionary([
+                    "noteID": noteID.uuidString,
+                    "section": concept.section,
+                    "source": concept.source,
+                    "category": concept.category
+                ]))
+            ]
+        )
+        try database.execute(
+            """
+            UPDATE concepts
+            SET description = CASE WHEN description = '' THEN ? ELSE description END,
+                confidence = MAX(confidence, ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(concept.definition),
+                .real(concept.confidence),
+                .text(timestamp),
+                .text(conceptID)
+            ]
+        )
+    }
+
+    private func deleteOrphanedConcepts() throws {
+        let rows = try database.fetch(
+            "SELECT id FROM concepts WHERE id NOT IN (SELECT DISTINCT concept_id FROM note_concepts)"
+        )
+        let orphanIDs = rows.compactMap { $0.string("id") }
+        for conceptID in orphanIDs {
+            try database.execute(
+                "DELETE FROM relationships WHERE source_concept_id = ? OR target_concept_id = ?",
+                bindings: [.text(conceptID), .text(conceptID)]
+            )
+            try database.execute("DELETE FROM concept_aliases WHERE concept_id = ?", bindings: [.text(conceptID)])
+            try database.execute("DELETE FROM canonical_concept_aliases WHERE concept_id = ?", bindings: [.text(conceptID)])
+            try database.execute("DELETE FROM concepts WHERE id = ?", bindings: [.text(conceptID)])
+            try database.execute("DELETE FROM canonical_concepts WHERE id = ?", bindings: [.text(conceptID)])
         }
     }
 
@@ -573,7 +1017,18 @@ final class KnowledgeRepository {
         }
 
         let conceptRows = try database.fetch(
-            "SELECT c.id, c.canonical_name, c.description, GROUP_CONCAT(a.alias, ' ') AS aliases FROM concepts c LEFT JOIN concept_aliases a ON a.concept_id = c.id GROUP BY c.id ORDER BY c.updated_at ASC"
+            """
+            SELECT c.id, c.canonical_name, c.description,
+                   GROUP_CONCAT(alias_source.alias, ' ') AS aliases
+            FROM concepts c
+            LEFT JOIN (
+                SELECT concept_id, alias FROM concept_aliases
+                UNION
+                SELECT concept_id, alias FROM canonical_concept_aliases
+            ) alias_source ON alias_source.concept_id = c.id
+            GROUP BY c.id
+            ORDER BY c.updated_at ASC
+            """
         )
         for row in conceptRows {
             guard let conceptID = row.string("id") else { continue }
@@ -651,7 +1106,20 @@ final class KnowledgeRepository {
 
     private func aliasesForConceptID(_ conceptID: String) throws -> [String] {
         let rows = try database.fetch(
-            "SELECT alias FROM concept_aliases WHERE concept_id = ? ORDER BY alias ASC",
+            """
+            SELECT alias FROM concept_aliases WHERE concept_id = ?
+            UNION
+            SELECT alias FROM canonical_concept_aliases WHERE concept_id = ?
+            ORDER BY alias ASC
+            """,
+            bindings: [.text(conceptID), .text(conceptID)]
+        )
+        return rows.compactMap { $0.string("alias") }
+    }
+
+    private func canonicalAliasesForConceptID(_ conceptID: String) throws -> [String] {
+        let rows = try database.fetch(
+            "SELECT alias FROM canonical_concept_aliases WHERE concept_id = ? ORDER BY alias ASC",
             bindings: [.text(conceptID)]
         )
         return rows.compactMap { $0.string("alias") }
@@ -683,14 +1151,61 @@ final class KnowledgeRepository {
         return (start > 0 ? "..." : "") + snippet + (end < sanitized.count ? "..." : "")
     }
 
+    private static func ftsQuery(from query: String) -> String? {
+        let tokens = query
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !tokens.isEmpty else { return nil }
+        return tokens.joined(separator: " ")
+    }
+
     private static func encodeDictionary(_ dictionary: [String: String]) -> String {
         let data = (try? JSONEncoder().encode(dictionary)) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func encodeStringArray(_ values: [String]) -> String {
+        let data = (try? JSONEncoder().encode(values)) ?? Data("[]".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 
     private static func decodeStringArray(_ json: String?) -> [String] {
         guard let json, let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([String].self, from: data)) ?? []
+    }
+
+    nonisolated private static func deduplicatedAliases(name: String, aliases: [String]) -> [String] {
+        var seen: Set<String> = []
+        return ([name] + aliases)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { alias in
+                seen.insert(normalizedConceptKey(alias)).inserted
+            }
+    }
+
+    nonisolated private static func normalizedConceptKey(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    nonisolated private static func identifierSlug(from normalizedName: String) -> String {
+        let slug = normalizedName
+            .split(separator: " ")
+            .joined(separator: "-")
+        return slug.isEmpty ? UUID().uuidString : slug
+    }
+
+    nonisolated private static func stableAliasID(noteID: UUID, conceptID: String, alias: String) -> String {
+        let normalizedAlias = normalizedConceptKey(alias)
+        return [noteID.uuidString, conceptID, identifierSlug(from: normalizedAlias)].joined(separator: ":")
     }
 
     private static func string(from date: Date) -> String {
@@ -700,5 +1215,35 @@ final class KnowledgeRepository {
     private static func date(from string: String?) -> Date? {
         guard let string else { return nil }
         return ISO8601DateFormatter().date(from: string)
+    }
+}
+
+final class KnowledgeGraphService {
+    static let shared = KnowledgeGraphService()
+
+    private let repository: KnowledgeRepository
+
+    init(repository: KnowledgeRepository = .shared) {
+        self.repository = repository
+    }
+
+    func neighbors(of conceptID: String, limit: Int = 20) throws -> [CanonicalConceptRecord] {
+        try repository.neighbors(of: conceptID, limit: limit)
+    }
+
+    func ancestors(of conceptID: String, depth: Int = 3, limit: Int = 32) throws -> [CanonicalConceptRecord] {
+        try repository.ancestors(of: conceptID, depth: depth, limit: limit)
+    }
+
+    func descendants(of conceptID: String, depth: Int = 3, limit: Int = 32) throws -> [CanonicalConceptRecord] {
+        try repository.descendants(of: conceptID, depth: depth, limit: limit)
+    }
+
+    func relatedConcepts(of conceptID: String, depth: Int = 2, limit: Int = 32) throws -> [CanonicalConceptRecord] {
+        try repository.relatedConcepts(of: conceptID, depth: depth, limit: limit)
+    }
+
+    func shortestPath(from sourceConceptID: String, to targetConceptID: String, maxDepth: Int = 5) throws -> [CanonicalConceptRecord] {
+        try repository.shortestPath(from: sourceConceptID, to: targetConceptID, maxDepth: maxDepth)
     }
 }

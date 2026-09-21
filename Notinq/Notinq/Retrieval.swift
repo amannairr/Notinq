@@ -236,9 +236,20 @@ final class GraphRetriever {
     static let shared = GraphRetriever()
 
     private let knowledgeRepository: KnowledgeRepository
+    private let graphService: KnowledgeGraphService
+    private let maxTraversalDepth: Int
+    private let maxTraversalConcepts: Int
 
-    init(knowledgeRepository: KnowledgeRepository = .shared) {
+    init(
+        knowledgeRepository: KnowledgeRepository = .shared,
+        graphService: KnowledgeGraphService? = nil,
+        maxTraversalDepth: Int = 2,
+        maxTraversalConcepts: Int = 12
+    ) {
         self.knowledgeRepository = knowledgeRepository
+        self.graphService = graphService ?? KnowledgeGraphService(repository: knowledgeRepository)
+        self.maxTraversalDepth = max(1, min(maxTraversalDepth, 4))
+        self.maxTraversalConcepts = max(1, min(maxTraversalConcepts, 48))
     }
 
     func retrieve(query: String, limit: Int = 10) -> [RetrievalHit] {
@@ -372,6 +383,62 @@ final class GraphRetriever {
                                 )
                             }
                         }
+                    }
+                }
+
+                let traversalConcepts = (
+                    (try? graphService.descendants(of: concept.conceptID, depth: maxTraversalDepth, limit: maxTraversalConcepts)) ?? []
+                ) + (
+                    (try? graphService.ancestors(of: concept.conceptID, depth: maxTraversalDepth, limit: maxTraversalConcepts / 2)) ?? []
+                ) + (
+                    (try? graphService.neighbors(of: concept.conceptID, limit: maxTraversalConcepts / 2)) ?? []
+                )
+
+                for relatedConcept in traversalConcepts {
+                    guard visitedConceptIDs.insert(relatedConcept.id).inserted else { continue }
+                    hits.append(makeConceptHit(concept: relatedConcept, relationshipID: nil, confidenceBonus: relatedConcept.confidence * 0.18))
+
+                    let relatedNoteIDs = relatedConcept.sourceReferences.compactMap { UUID(uuidString: $0) }
+                    for noteID in relatedNoteIDs.prefix(2) {
+                        guard visitedNoteIDs.insert(noteID).inserted else { continue }
+                        let noteTitle = (try? knowledgeRepository.noteTitle(for: noteID)) ?? relatedConcept.canonicalName
+                        hits.append(
+                            RetrievalHit(
+                                id: "note:\(noteID.uuidString)",
+                                kind: .note,
+                                noteID: noteID,
+                                noteTitle: noteTitle,
+                                chunkID: nil,
+                                conceptID: relatedConcept.id,
+                                folderID: nil,
+                                folderTitle: nil,
+                                title: noteTitle,
+                                snippet: relatedConcept.description.isEmpty ? relatedConcept.canonicalName : relatedConcept.description,
+                                content: relatedConcept.description,
+                                relevance: max(0.2, concept.rank * 0.42 + relatedConcept.confidence * 0.22),
+                                updatedAt: nil,
+                                relationshipID: nil,
+                                provenance: [
+                                    "concept:\(relatedConcept.id)",
+                                    "note:\(noteID.uuidString)",
+                                    "graph-depth:\(maxTraversalDepth)"
+                                ],
+                                sources: [
+                                    RetrievalSource(
+                                        type: .concept,
+                                        id: "concept:\(relatedConcept.id)",
+                                        title: relatedConcept.canonicalName,
+                                        noteID: noteID,
+                                        noteTitle: noteTitle,
+                                        chunkID: nil,
+                                        conceptID: relatedConcept.id,
+                                        relationshipID: nil,
+                                        location: nil,
+                                        summary: relatedConcept.description.isEmpty ? relatedConcept.canonicalName : relatedConcept.description
+                                    )
+                                ]
+                            )
+                        )
                     }
                 }
             }
@@ -527,11 +594,15 @@ final class HybridRetriever {
             guard hit.kind == .note, normalizedQuery.isEmpty == false else { return 0.0 }
             let normalizedTitle = hit.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let normalizedContent = hit.content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return normalizedTitle == normalizedQuery || normalizedContent == normalizedQuery ? 1.5 : 0.0
+            if normalizedTitle == normalizedQuery || normalizedContent == normalizedQuery {
+                return 3.0
+            }
+            return normalizedTitle.contains(normalizedQuery) || normalizedContent.contains(normalizedQuery) ? 3.0 : 0.0
         }()
         let masteryScore = masteryLookup[hit.conceptID ?? ""] ?? masteryLookup[hit.noteID.uuidString] ?? 0.5
         let masteryBoost = hit.kind == .concept || hit.kind == .chunk ? (1.0 - masteryScore) * 0.1 : 0.0
-        copy.relevance = hit.relevance + base + sourceBoost + relationshipBoost + kindBoost + queryBoost + exactNoteMatchBoost + masteryBoost
+        let normalizedSourceRelevance = hit.relevance / (abs(hit.relevance) + 1.0)
+        copy.relevance = normalizedSourceRelevance + base + sourceBoost + relationshipBoost + kindBoost + queryBoost + exactNoteMatchBoost + masteryBoost
         return copy
     }
 

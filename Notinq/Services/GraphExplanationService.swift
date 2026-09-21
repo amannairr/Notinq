@@ -1,21 +1,18 @@
 import Foundation
 
-typealias Concept = CanonicalConceptRecord
-typealias Relationship = KnowledgeRelationshipRecord
-
-struct GraphPath: Equatable, Sendable {
-    let nodes: [Concept]
-    let relationships: [Relationship]
+struct GraphPath: Codable, Equatable, Sendable {
+    let nodes: [CanonicalConceptRecord]
+    let relationships: [KnowledgeRelationshipRecord]
 }
 
-struct ConceptExplanation: Equatable, Sendable {
+struct ConceptExplanation: Codable, Equatable, Sendable {
     let conceptName: String
     let aliases: [String]
     let prerequisites: [String]
     let dependents: [String]
     let relatedConcepts: [String]
-    let incomingRelationships: [Relationship]
-    let outgoingRelationships: [Relationship]
+    let incomingRelationships: [KnowledgeRelationshipRecord]
+    let outgoingRelationships: [KnowledgeRelationshipRecord]
 }
 
 final class GraphExplanationService {
@@ -37,7 +34,7 @@ final class GraphExplanationService {
             return GraphPath(nodes: [sourceConcept], relationships: [])
         }
 
-        var frontier: [(conceptID: String, nodeIDs: [String], relationships: [Relationship])] = [
+        var frontier: [(conceptID: String, nodeIDs: [String], relationships: [KnowledgeRelationshipRecord])] = [
             (sourceConcept.id, [sourceConcept.id], [])
         ]
         var visited: Set<String> = [sourceConcept.id]
@@ -151,35 +148,54 @@ final class GraphExplanationService {
 
     func descendants(of concept: String) -> [String] {
         guard let resolvedConcept = resolveConcept(concept) else { return [] }
-        return (try? repository.descendants(of: resolvedConcept.id, depth: maxPathDepth, limit: 128))?
-            .map(\.canonicalName)
-            .uniqued()
-            ?? []
+
+        var result: [String] = []
+        var visited: Set<String> = [resolvedConcept.id]
+        var frontier: [(conceptID: String, depth: Int)] = [(resolvedConcept.id, 0)]
+
+        while frontier.isEmpty == false {
+            let current = frontier.removeFirst()
+            guard current.depth < maxPathDepth else { continue }
+
+            let outgoing = relationshipsTouching(current.conceptID)
+                .filter { $0.sourceConceptID == current.conceptID }
+
+            for relationship in outgoing {
+                let nextID = relationship.targetConceptID
+                guard visited.insert(nextID).inserted else { continue }
+                guard let nextConcept = conceptRecord(for: nextID) else { continue }
+
+                result.append(nextConcept.canonicalName)
+                frontier.append((nextID, current.depth + 1))
+            }
+        }
+
+        return result.uniqued()
     }
 
-    private func resolveConcept(_ name: String) -> Concept? {
+    private func resolveConcept(_ name: String) -> CanonicalConceptRecord? {
         guard let canonicalConcept = try? repository.canonicalConcept(named: name),
               let record = conceptRecord(for: canonicalConcept.id)
         else { return nil }
         return record
     }
 
-    private func conceptRecord(for conceptID: String) -> Concept? {
+    private func conceptRecord(for conceptID: String) -> CanonicalConceptRecord? {
         try? repository.concept(for: conceptID)
     }
 
-    private func relationshipsTouching(_ conceptID: String) -> [Relationship] {
+    private func relationshipsTouching(_ conceptID: String) -> [KnowledgeRelationshipRecord] {
         ((try? repository.relationships(containing: conceptID, limit: relationshipLimit)) ?? [])
             .sorted(by: relationshipSort)
     }
 
-    private func nextConceptID(from conceptID: String, relationship: Relationship) -> String? {
+    private func nextConceptID(from conceptID: String, relationship: KnowledgeRelationshipRecord) -> String? {
         if relationship.sourceConceptID == conceptID { return relationship.targetConceptID }
         if relationship.targetConceptID == conceptID { return relationship.sourceConceptID }
         return nil
     }
 
-    private func isPrerequisiteRelationship(_ relationship: Relationship) -> Bool {
+    private func isPrerequisiteRelationship(_ relationship: KnowledgeRelationshipRecord) -> Bool {
         let relation = relationship.relationType.lowercased()
         return relationship.relationType == KnowledgeRelationshipKind.requires.rawValue
             || relation.contains("require")
@@ -187,7 +203,7 @@ final class GraphExplanationService {
             || relation.contains("prereq")
     }
 
-    private func relationshipSort(_ lhs: Relationship, _ rhs: Relationship) -> Bool {
+    private func relationshipSort(_ lhs: KnowledgeRelationshipRecord, _ rhs: KnowledgeRelationshipRecord) -> Bool {
         if lhs.confidence != rhs.confidence { return lhs.confidence > rhs.confidence }
         if lhs.relationType != rhs.relationType { return lhs.relationType < rhs.relationType }
         if lhs.sourceConceptID != rhs.sourceConceptID { return lhs.sourceConceptID < rhs.sourceConceptID }

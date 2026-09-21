@@ -10,6 +10,7 @@ import SwiftUI
 struct SelectionToolbarView: View {
 
     var onSummarize: () -> Void
+    var onExpand: () -> Void
     var onSimplify: () -> Void
     var onRewrite: () -> Void
     var onExplain: () -> Void
@@ -24,6 +25,7 @@ struct SelectionToolbarView: View {
         HStack(spacing: 10) {
             actionGroup {
                 ActionIcon(name: "summary", label: "Summarize", action: onSummarize)
+                actionPill("Expand", action: onExpand)
                 actionPill("Simplify", action: onSimplify)
                 ActionIcon(name: "rewrite", label: "Rewrite", action: onRewrite)
                 ActionIcon(name: "explain", label: "Explain", action: onExplain)
@@ -63,6 +65,18 @@ struct SelectionToolbarView: View {
     static func isVisible(for selectionRange: NSRange) -> Bool {
         selectionRange.length > 0
     }
+
+    static let actionLabels = [
+        "Summarize",
+        "Expand",
+        "Simplify",
+        "Rewrite",
+        "Explain",
+        "Flashcards",
+        "Quiz",
+        "Copy",
+        "Ask AI"
+    ]
 
     private func actionPill(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)

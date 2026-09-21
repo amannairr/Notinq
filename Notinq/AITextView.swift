@@ -18,6 +18,7 @@ struct AITextView: NSViewRepresentable {
     var onReady: ((TextViewBridge) -> Void)?
     
     var onSummarize: (() -> Void)?
+    var onExpand: (() -> Void)?
     var onSimplify: (() -> Void)?
     var onRewrite: (() -> Void)?
     var onExplain: (() -> Void)?
@@ -222,6 +223,7 @@ struct AITextView: NSViewRepresentable {
             let hosting = NSHostingView(
                 rootView: SelectionToolbarView(
                     onSummarize: { self.parent.onSummarize?() },
+                    onExpand: { self.parent.onExpand?() },
                     onSimplify: { self.parent.onSimplify?() },
                     onRewrite: { self.parent.onRewrite?() },
                     onExplain: { self.parent.onExplain?() },

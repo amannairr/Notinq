@@ -3,6 +3,46 @@ import SwiftUI
 import XCTest
 @testable import Notinq
 
+private func makeProposalBridge(text: String, selection: NSRange) -> (TextViewBridge, NSTextView) {
+    let bridge = TextViewBridge()
+    let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+    textView.isRichText = true
+    textView.allowsUndo = true
+    textView.isVerticallyResizable = true
+    textView.isHorizontallyResizable = false
+    textView.textContainerInset = NSSize(width: 24, height: 20)
+    textView.string = text
+    textView.setSelectedRange(selection)
+    bridge.textView = textView
+    return (bridge, textView)
+}
+
+private final class MockAIProposalGenerator: AIProposalGenerating {
+    var response: String
+    private(set) var action: AIEditorAction?
+    private(set) var selectedText = ""
+    private(set) var noteContext = ""
+    private(set) var noteID: UUID?
+
+    init(response: String) {
+        self.response = response
+    }
+
+    func generate(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID?,
+        completion: @escaping (String) -> Void
+    ) {
+        self.action = action
+        self.selectedText = selectedText
+        self.noteContext = noteContext
+        self.noteID = noteID
+        completion(response)
+    }
+}
+
 @MainActor
 final class NotinqTests: XCTestCase {
 
@@ -160,6 +200,15 @@ final class NotinqTests: XCTestCase {
     func testSelectionToolbarVisibilityDependsOnSelectionLength() {
         XCTAssertFalse(SelectionToolbarView.isVisible(for: NSRange(location: 0, length: 0)))
         XCTAssertTrue(SelectionToolbarView.isVisible(for: NSRange(location: 4, length: 12)))
+    }
+
+    func testExpandAppearsForNonEmptySelection() {
+        XCTAssertTrue(SelectionToolbarView.isVisible(for: NSRange(location: 4, length: 12)))
+        XCTAssertTrue(SelectionToolbarView.actionLabels.contains("Expand"))
+    }
+
+    func testExpandDoesNotAppearForEmptySelection() {
+        XCTAssertFalse(SelectionToolbarView.isVisible(for: NSRange(location: 4, length: 0)))
     }
 
     func testStudyOverflowAffordanceAppearsWhenContentExceedsViewport() {
@@ -600,6 +649,336 @@ final class NotinqTests: XCTestCase {
         XCTAssertNotNil(boldFont)
         XCTAssertEqual(textView.selectedRange(), questionRange)
         XCTAssertTrue(textView.isEditable)
+    }
+
+    func testAIProposalGenerationDoesNotModifyDocumentContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+
+        let proposal = bridge.makeAIProposal(
+            action: .expand,
+            response: "Expanded beta",
+            selectionRange: textView.selectedRange(),
+            provenance: AIProposalProvenance(
+                sourceNoteRange: NSRange(location: 6, length: 4),
+                transcriptReference: "transcript-placeholder",
+                slideReference: "slide-placeholder"
+            )
+        )
+
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 6, length: 4))
+        XCTAssertEqual(proposal?.status, .pending)
+        XCTAssertEqual(proposal?.originalText, "beta")
+        XCTAssertEqual(proposal?.insertionLocation, 10)
+        XCTAssertEqual(proposal?.provenance.sourceNoteRange, NSRange(location: 6, length: 4))
+        XCTAssertEqual(proposal?.provenance.transcriptReference, "transcript-placeholder")
+        XCTAssertEqual(proposal?.provenance.slideReference, "slide-placeholder")
+    }
+
+    func testAcceptingAIProposalModifiesDocumentContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta", selection: NSRange(location: 6, length: 4))
+        guard let proposal = bridge.makeAIProposal(
+            action: .expand,
+            response: "Expanded idea.",
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        let accepted = bridge.acceptAIProposal(proposal)
+
+        XCTAssertEqual(accepted.status, .accepted)
+        XCTAssertTrue(textView.string.contains("Expansion"))
+        XCTAssertTrue(textView.string.contains("Expanded idea."))
+    }
+
+    func testRejectingAIProposalLeavesDocumentUnchanged() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta", selection: NSRange(location: 6, length: 4))
+        guard let proposal = bridge.makeAIProposal(
+            action: .explain,
+            response: "An explanation.",
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        let rejected = bridge.rejectAIProposal(proposal)
+
+        XCTAssertEqual(rejected.status, .rejected)
+        XCTAssertEqual(textView.string, "Alpha beta")
+    }
+
+    func testEditingThenAcceptingAIProposalInsertsEditedContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta", selection: NSRange(location: 6, length: 4))
+        guard let proposal = bridge.makeAIProposal(
+            action: .explain,
+            response: "Original generated text.",
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        let edited = bridge.editAIProposal(proposal, generatedText: "Edited generated text.")
+        let accepted = bridge.acceptAIProposal(edited)
+
+        XCTAssertEqual(edited.status, .edited)
+        XCTAssertEqual(accepted.status, .accepted)
+        XCTAssertTrue(textView.string.contains("Edited generated text."))
+        XCTAssertFalse(textView.string.contains("Original generated text."))
+    }
+
+    func testAIProposalFlowPreservesOriginalSelection() {
+        let originalSelection = NSRange(location: 6, length: 4)
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+        guard let proposal = bridge.makeAIProposal(
+            action: .expand,
+            response: "Expanded beta.",
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        XCTAssertEqual(textView.selectedRange(), originalSelection)
+        _ = bridge.acceptAIProposal(proposal)
+        XCTAssertEqual(textView.selectedRange(), originalSelection)
+    }
+
+    func testAcceptedAIProposalRendersMarkdownInsteadOfRawMarkdown() {
+        let (bridge, textView) = makeProposalBridge(text: "Start", selection: NSRange(location: 5, length: 0))
+        guard let proposal = bridge.makeAIProposal(
+            action: .explain,
+            response: """
+            ## Explanation
+            **Bold** detail
+
+            - First
+            """,
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
+
+        XCTAssertFalse(textView.string.contains("##"))
+        XCTAssertFalse(textView.string.contains("**"))
+        XCTAssertTrue(textView.string.contains("Explanation"))
+        XCTAssertTrue(textView.string.contains("Bold detail"))
+        XCTAssertTrue(textView.string.contains("• First"))
+    }
+
+    func testAcceptedAIProposalAppliesAIInsertionAttributes() {
+        let (bridge, textView) = makeProposalBridge(text: "Prompt", selection: NSRange(location: 6, length: 0))
+        guard let proposal = bridge.makeAIProposal(
+            action: .expand,
+            response: "Expanded idea.",
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
+
+        let insertedRange = (textView.string as NSString).range(of: "Expanded idea.")
+        let role = textView.textStorage?.attribute(NSAttributedString.Key.aiBlockRole, at: insertedRange.location, effectiveRange: nil) as? String
+        let insertedAt = textView.textStorage?.attribute(NSAttributedString.Key.aiBlockInsertedAt, at: insertedRange.location, effectiveRange: nil) as? Date
+        XCTAssertEqual(role, "content")
+        XCTAssertNotNil(insertedAt)
+    }
+
+    func testExpandTapCreatesAIProposalWithMockResponse() {
+        let noteID = UUID()
+        let (bridge, _) = makeProposalBridge(text: "Photosynthesis uses light.", selection: NSRange(location: 0, length: 14))
+        let generator = MockAIProposalGenerator(response: "Photosynthesis uses light energy to drive sugar production.")
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        coordinator.beginExpand(noteContext: "Photosynthesis uses light. Chlorophyll absorbs photons.", noteID: noteID)
+
+        XCTAssertEqual(generator.action, .expand)
+        XCTAssertEqual(generator.selectedText, "Photosynthesis")
+        XCTAssertEqual(generator.noteID, noteID)
+        XCTAssertEqual(coordinator.proposal?.action, .expand)
+        XCTAssertEqual(coordinator.proposal?.status, .pending)
+        XCTAssertEqual(coordinator.proposal?.originalText, "Photosynthesis")
+        XCTAssertEqual(coordinator.proposal?.generatedText, "Photosynthesis uses light energy to drive sugar production.")
+    }
+
+    func testExpandProposalGenerationDoesNotModifyDocumentContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Beta is expanded with context.")
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 6, length: 4))
+        XCTAssertNotNil(coordinator.proposal)
+    }
+
+    func testExpandProposalPreviewDoesNotModifyDocumentContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let proposal = bridge.makeAIProposal(
+            action: .expand,
+            response: "Beta is expanded.",
+            selectionRange: textView.selectedRange()
+        )
+
+        XCTAssertNotNil(proposal)
+        XCTAssertTrue(AIProposalPreviewView.actionLabels.contains("Accept"))
+        XCTAssertTrue(AIProposalPreviewView.actionLabels.contains("Edit"))
+        XCTAssertTrue(AIProposalPreviewView.actionLabels.contains("Reject"))
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testEditingExpandProposalDoesNotModifyDocumentContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Original expansion.")
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        coordinator.editProposal(text: "Edited expansion.")
+
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+        XCTAssertEqual(coordinator.proposal?.generatedText, "Edited expansion.")
+        XCTAssertEqual(coordinator.proposal?.status, .edited)
+    }
+
+    func testAcceptingExpandProposalInsertsGeneratedContentCorrectly() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Beta is the second Greek letter.")
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        let accepted = coordinator.acceptProposal()
+
+        XCTAssertEqual(accepted?.status, .accepted)
+        XCTAssertTrue(textView.string.contains("Alpha beta"))
+        XCTAssertTrue(textView.string.contains("Expansion"))
+        XCTAssertTrue(textView.string.contains("Beta is the second Greek letter."))
+        XCTAssertTrue(textView.string.contains("gamma"))
+    }
+
+    func testRejectingExpandProposalLeavesDocumentUnchanged() {
+        let originalSelection = NSRange(location: 6, length: 4)
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Beta is expanded.")
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        let rejected = coordinator.rejectProposal()
+
+        XCTAssertEqual(rejected?.status, .rejected)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+        XCTAssertEqual(textView.selectedRange(), originalSelection)
+        XCTAssertNil(coordinator.proposal)
+    }
+
+    func testEditingThenAcceptingExpandProposalInsertsEditedContent() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Original expansion.")
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        coordinator.editProposal(text: "Edited expansion.")
+        let accepted = coordinator.acceptProposal()
+
+        XCTAssertEqual(accepted?.status, .accepted)
+        XCTAssertTrue(textView.string.contains("Edited expansion."))
+        XCTAssertFalse(textView.string.contains("Original expansion."))
+    }
+
+    func testAcceptedExpandProposalRendersMarkdownInsteadOfRawMarkdown() {
+        let (bridge, textView) = makeProposalBridge(text: "Start beta", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: """
+            ## Explanation
+            **Beta** connects to:
+            - Alpha
+            """)
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        _ = coordinator.acceptProposal()
+
+        XCTAssertFalse(textView.string.contains("##"))
+        XCTAssertFalse(textView.string.contains("**"))
+        XCTAssertTrue(textView.string.contains("Explanation"))
+        XCTAssertTrue(textView.string.contains("• Alpha"))
+    }
+
+    func testAcceptedExpandProposalReceivesAIInsertionAttributes() {
+        let (bridge, textView) = makeProposalBridge(text: "Start beta", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Beta expansion.")
+        )
+
+        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        _ = coordinator.acceptProposal()
+
+        let insertedRange = (textView.string as NSString).range(of: "Beta expansion.")
+        let role = textView.textStorage?.attribute(NSAttributedString.Key.aiBlockRole, at: insertedRange.location, effectiveRange: nil) as? String
+        let insertedAt = textView.textStorage?.attribute(NSAttributedString.Key.aiBlockInsertedAt, at: insertedRange.location, effectiveRange: nil) as? Date
+        XCTAssertEqual(role, "content")
+        XCTAssertNotNil(insertedAt)
+    }
+
+    func testExpandSelectionPreservationAcrossRejectAndAccept() {
+        let originalSelection = NSRange(location: 6, length: 4)
+        let (rejectBridge, rejectTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+        let rejectCoordinator = AIProposalCoordinator(
+            bridge: rejectBridge,
+            generator: MockAIProposalGenerator(response: "Beta is expanded.")
+        )
+
+        rejectCoordinator.beginExpand(noteContext: rejectTextView.string, noteID: UUID())
+        XCTAssertEqual(rejectTextView.selectedRange(), originalSelection)
+        _ = rejectCoordinator.rejectProposal()
+        XCTAssertEqual(rejectTextView.selectedRange(), originalSelection)
+
+        let (acceptBridge, acceptTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+        let acceptCoordinator = AIProposalCoordinator(
+            bridge: acceptBridge,
+            generator: MockAIProposalGenerator(response: "Beta is expanded.")
+        )
+
+        acceptCoordinator.beginExpand(noteContext: acceptTextView.string, noteID: UUID())
+        _ = acceptCoordinator.acceptProposal()
+
+        XCTAssertTrue(acceptTextView.string.contains("Beta is expanded."))
+        XCTAssertEqual(acceptTextView.selectedRange(), originalSelection)
+    }
+
+    func testExpandPromptUsesSelectedTextAndContextWithoutOverridingSelection() {
+        let prompt = AIService.editorProposalPrompt(
+            action: .expand,
+            selectedText: "Gradient descent updates weights.",
+            noteContext: "Neural network notes mention loss functions."
+        )
+
+        XCTAssertTrue(prompt.contains("Expand the selected idea"))
+        XCTAssertTrue(prompt.contains("Do not invent facts"))
+        XCTAssertTrue(prompt.contains("Selected text:"))
+        XCTAssertTrue(prompt.contains("Gradient descent updates weights."))
+        XCTAssertTrue(prompt.contains("Surrounding note context:"))
+        XCTAssertTrue(prompt.contains("do not let unrelated context override the selected idea"))
     }
 
     func testSemanticStudyColorsAdaptToAppearances() {
@@ -1294,4 +1673,5 @@ final class AIEvaluationRegressionTests: XCTestCase {
         scores.overall = overall
         return scores
     }
+
 }

@@ -497,15 +497,16 @@ struct SummaryPrompt: PromptDefinition {
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
         let body = PromptJSONSupport.encode(input.knowledge)
+        let graphText = context.graphPromptRepresentation
         return PromptBuilder.buildDocument(
             role: "You are a study summary writer.",
             task: "Write a study summary that stays faithful to the structured knowledge.",
-            rules: ["Do not add facts not present in the knowledge snapshot.", "Prefer short, direct language."],
+            rules: ["Do not add facts not present in the knowledge snapshot.", "Prefer short, direct language."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not emit formatted prose outside the schema.", "Do not repeat the same point more than once."],
             validationRules: ["All sections must be present.", "Summary should be grounded in extracted concepts."],
-            body: "Note title: \(input.noteTitle)\n\nStructured knowledge JSON:\n\(body)",
+            body: PromptFragments.inputWithGraph("Note title: \(input.noteTitle)\n\nStructured knowledge JSON:\n\(body)", graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -532,15 +533,16 @@ struct FlashcardsPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a flashcard generator.",
             task: "Create focused, non-duplicative flashcards from structured knowledge.",
-            rules: ["One concept per card.", "Avoid redundant cards.", "Keep backs short and precise."],
+            rules: ["One concept per card.", "Avoid redundant cards.", "Keep backs short and precise.", "Create relationship cards when the graph has high-confidence edges."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not add explanations beyond the back field.", "Do not output formatted prose outside the schema."],
             validationRules: ["Each card needs a front and back.", "Avoid duplicate fronts."],
-            body: "Structured knowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))",
+            body: PromptFragments.inputWithGraph("Structured knowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))", graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -567,15 +569,16 @@ struct QuizPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a quiz writer.",
             task: "Create multiple choice quiz items grounded in structured knowledge.",
-            rules: ["Use plausible distractors.", "Keep explanations short.", "Prefer application over trivia."],
+            rules: ["Use plausible distractors.", "Keep explanations short.", "Prefer application over trivia.", "Ask relationship and prerequisite questions when the graph provides them."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not repeat the same question.", "Do not use ambiguous correct answers."],
             validationRules: ["Each question needs at least two options.", "Each question needs an explanation."],
-            body: "Structured knowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))",
+            body: PromptFragments.inputWithGraph("Structured knowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))", graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -602,15 +605,16 @@ struct LearningInsightsPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .graphAware
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a learning analyst.",
             task: "Return study priorities and coverage gaps from structured knowledge.",
-            rules: ["Use only extracted knowledge.", "Prioritize actionable study guidance."],
+            rules: ["Use only extracted knowledge.", "Prioritize actionable study guidance.", "Use prerequisite chains and dependents to rank priorities."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not speculate about missing content.", "Do not repeat the same gap wording."],
             validationRules: ["Insights should map to extracted concepts.", "Top priorities should be explicit."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -641,15 +645,16 @@ struct ConceptMapPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .graphAware
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a concept map renderer.",
             task: "Render the explicit relationships from structured knowledge as a stable concept tree.",
-            rules: ["Use relationships already present in the knowledge snapshot.", "Do not invent new nodes.", "Keep the hierarchy shallow and stable."],
+            rules: ["Use relationships already present in the knowledge snapshot.", "Do not invent new nodes.", "Keep the hierarchy shallow and stable."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not invent nodes.", "Do not duplicate nodes across branches."],
             validationRules: ["Hierarchy must reflect the relationship graph.", "Children should be related to the parent."],
-            body: PromptJSONSupport.encode(input.knowledge.relationships),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge.relationships), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -714,15 +719,16 @@ struct TutorPrompt: PromptDefinition {
         let tutorGuidance = context.tutorContext?.guidanceSummary ?? "No mastery data available."
         let evidenceSummary = context.tutorContext?.evidenceSummary ?? "No retrieved evidence available."
         let citationsJSON = PromptJSONSupport.encode(context.tutorContext?.citations ?? [])
+        let graphText = context.graphPromptRepresentation
         return PromptBuilder.buildDocument(
             role: "You are a local study tutor.",
             task: "Answer the user's question using the structured knowledge snapshot.",
-            rules: ["Do not invent facts.", "Use concise explanations.", "Prefer direct answers.", "Adapt the explanation depth to the student's mastery.", PromptFragments.citationRules(), "Reference the retrieved evidence and source notes when available."],
+            rules: ["Do not invent facts.", "Use concise explanations.", "Prefer direct answers.", "Adapt the explanation depth to the student's mastery.", PromptFragments.citationRules(), "Reference the retrieved evidence and source notes when available."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not answer outside the knowledge snapshot.", "Do not add unsupported references.", "Do not cite sources that do not appear in the evidence summary."],
             validationRules: ["The answer should relate to the question.", "Include key points and follow-up questions.", "Ground the explanation in retrieved notes, chunks, or concepts."],
-            body: "Note title: \(input.noteTitle)\n\nQuestion: \(input.question)\n\nTutor guidance:\n\(tutorGuidance)\n\nEvidence summary:\n\(evidenceSummary)\n\nCitations JSON:\n\(citationsJSON)\n\nKnowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))",
+            body: PromptFragments.inputWithGraph("Note title: \(input.noteTitle)\n\nQuestion: \(input.question)\n\nTutor guidance:\n\(tutorGuidance)\n\nEvidence summary:\n\(evidenceSummary)\n\nCitations JSON:\n\(citationsJSON)\n\nKnowledge JSON:\n\(PromptJSONSupport.encode(input.knowledge))", graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -769,15 +775,16 @@ struct DefinitionsPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a definitions extractor.",
             task: "List the key terms and their concise definitions.",
-            rules: ["Use terms from the knowledge snapshot.", "Keep definitions short."],
+            rules: ["Use terms from the knowledge snapshot.", "Keep definitions short.", "Use graph aliases and related concepts when available."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not invent new terminology.", "Do not duplicate definitions."],
             validationRules: ["Every definition should correspond to a concept.", "Aliases should be compact."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -805,15 +812,16 @@ struct TimelinePrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a timeline builder.",
             task: "Infer a timeline of events or stages from the knowledge snapshot.",
-            rules: ["Use only grounded sequence information.", "Keep the timeline concise."],
+            rules: ["Use only grounded sequence information.", "Keep the timeline concise."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not invent dates.", "Use stage labels when dates are not present."],
             validationRules: ["Events should be ordered logically.", "Each event should have a clear significance."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -840,15 +848,16 @@ struct FormulaExtractionPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a formula extraction model.",
             task: "Extract formulas, variables, and examples from the structured knowledge.",
-            rules: ["Keep formulas literal.", "Use only formulas in the source."],
+            rules: ["Keep formulas literal.", "Use only formulas in the source."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not invent new formulas.", "Do not over-explain."],
             validationRules: ["Each formula should have meaning and example.", "Variables should be explicit."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -876,15 +885,16 @@ struct RevisionPlanPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a revision planner.",
             task: "Turn the structured knowledge into a compact study plan.",
-            rules: ["Prioritize high-yield concepts.", "Make the plan actionable."],
+            rules: ["Prioritize high-yield concepts.", "Make the plan actionable.", "Order revision by prerequisite chains before dependents."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not be verbose.", "Do not add unrelated study advice."],
             validationRules: ["Priorities and daily plan should align with the snapshot.", "Keep quick wins short."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -911,15 +921,16 @@ struct CheatSheetPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a cheat sheet generator.",
             task: "Create a compact cheat sheet with bullets and mnemonics.",
-            rules: ["Keep it short.", "Use high-yield phrasing."],
+            rules: ["Keep it short.", "Use high-yield phrasing.", "Include graph-connected prerequisites or dependencies when useful."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not produce essays.", "Do not duplicate bullets."],
             validationRules: ["Bullets should be specific.", "Mnemonics should be memorable."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,
@@ -1061,7 +1072,7 @@ struct AIHelperChatPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .heuristic
 
     static func buildDocument(input: PromptExtractionInput, context: PromptBuildContext) -> PromptDocument {
-        let body = """
+        let baseBody = """
         Note title: \(input.noteTitle)
 
         Note text:
@@ -1070,10 +1081,11 @@ struct AIHelperChatPrompt: PromptDefinition {
         User request:
         \(context.userRequest ?? "")
         """
+        let body = PromptFragments.inputWithGraph(baseBody, graphText: context.graphPromptRepresentation)
         return PromptBuilder.buildDocument(
             role: "You are a grounded note assistant.",
             task: "Respond directly to the user's request.",
-            rules: ["Use the note as primary context.", "Be concise when the request is concise."],
+            rules: ["Use the note as primary context.", "Be concise when the request is concise."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not invent unsupported facts.", "Do not mention internal policies."],
@@ -1148,15 +1160,16 @@ struct AIActionItemsPrompt: PromptDefinition {
     static let validationStrategy: PromptValidationStrategy = .typed
 
     static func buildDocument(input: PromptStructuredKnowledgeInput, context: PromptBuildContext) -> PromptDocument {
-        PromptBuilder.buildDocument(
+        let graphText = context.graphPromptRepresentation
+        return PromptBuilder.buildDocument(
             role: "You are a practice question generator.",
             task: "Return short application-oriented prompts with answers.",
-            rules: ["Keep prompts focused.", "Ground each question in the structured knowledge."],
+            rules: ["Keep prompts focused.", "Ground each question in the structured knowledge.", "Include graph relationship questions when available."] + PromptFragments.graphGroundingRules(),
             schema: outputSchema,
             confidenceRequirement: confidenceRequirement,
             failureRules: ["Do not create duplicate prompts.", "Do not create vague answers."],
             validationRules: ["Questions should be answerable from the snapshot.", "Answers should be short."],
-            body: PromptJSONSupport.encode(input.knowledge),
+            body: PromptFragments.inputWithGraph(PromptJSONSupport.encode(input.knowledge), graphText: graphText),
             temperature: defaultTemperature,
             topP: defaultTopP,
             maxTokens: defaultMaxTokens,

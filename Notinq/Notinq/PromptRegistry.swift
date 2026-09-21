@@ -184,7 +184,11 @@ final class PromptRegistry {
            identifier != .knowledgeExtraction,
            identifier != .assistantChat,
            identifier != .directEditing {
-            document.userPrompt = "Structured knowledge JSON:\n\(knowledgeJSON)"
+            let graphText = decodeKnowledgeContext(from: knowledgeJSON)?.graphPromptRepresentation() ?? ""
+            document.userPrompt = PromptFragments.inputWithGraph(
+                "Structured knowledge JSON:\n\(knowledgeJSON)",
+                graphText: graphText
+            )
         }
         return buildRequest(from: document, identifier: identifier)
     }
@@ -325,6 +329,7 @@ final class PromptRegistry {
             noteText: identifier == .assistantChat || identifier == .directEditing ? context.noteText : "",
             structuredKnowledge: structuredKnowledge,
             knowledgeSnapshot: snapshot,
+            graphContext: knowledgeContext?.graphContext,
             tutorContext: knowledgeContext?.tutorContext,
             selectedText: context.selectedText,
             userRequest: context.userRequest,

@@ -289,11 +289,97 @@ class TextViewBridge {
         guard !cleaned.isEmpty else { return }
 
         let insertionIndex = safeInsertionIndex(after: selectionRange, textLength: storage.length)
+        insertAIBlock(
+            actionTitle: action.blockTitle,
+            content: cleaned,
+            insertionIndex: insertionIndex,
+            preserveSelection: nil
+        )
+    }
+
+    func makeAIProposal(
+        action: AIEditorAction,
+        response: String,
+        selectionRange: NSRange,
+        provenance: AIProposalProvenance = AIProposalProvenance()
+    ) -> AIProposal? {
+        guard let tv = textView, let storage = tv.textStorage else { return nil }
+        let cleaned = Self.cleanGeneratedText(response)
+        guard !cleaned.isEmpty else { return nil }
+
+        let originalSelection = tv.selectedRange()
+        let clampedSelection = clampedRange(selectionRange, textLength: storage.length)
+        let originalText = clampedSelection.length > 0
+            ? (tv.string as NSString).substring(with: clampedSelection)
+            : ""
+        let insertionIndex = safeInsertionIndex(after: clampedSelection, textLength: storage.length)
+        tv.setSelectedRange(originalSelection)
+
+        return AIProposal(
+            action: action,
+            originalText: originalText,
+            generatedText: cleaned,
+            insertionRange: NSRange(location: insertionIndex, length: 0),
+            originalSelectionRange: originalSelection,
+            provenance: provenance
+        )
+    }
+
+    func acceptAIProposal(_ proposal: AIProposal, editedText: String? = nil) -> AIProposal {
+        var accepted = proposal
+        let content = TextViewBridge.cleanGeneratedText(editedText ?? proposal.generatedText)
+        guard let tv = textView,
+              let storage = tv.textStorage,
+              !content.isEmpty else {
+            return accepted
+        }
+
+        let insertionIndex = min(max(0, proposal.insertionLocation), storage.length)
+        insertAIBlock(
+            actionTitle: proposal.action.blockTitle,
+            content: content,
+            insertionIndex: insertionIndex,
+            preserveSelection: proposal.originalSelectionRange
+        )
+
+        accepted.generatedText = content
+        accepted.status = editedText == nil ? .accepted : .edited
+        return accepted
+    }
+
+    func editAIProposal(_ proposal: AIProposal, generatedText: String) -> AIProposal {
+        var edited = proposal
+        edited.generatedText = generatedText
+        edited.status = .edited
+        return edited
+    }
+
+    func rejectAIProposal(_ proposal: AIProposal) -> AIProposal {
+        var rejected = proposal
+        rejected.status = .rejected
+        return rejected
+    }
+
+    func restoreSelection(for proposal: AIProposal) {
+        guard let tv = textView,
+              let storage = tv.textStorage else { return }
+        let restoredSelection = clampedRange(proposal.originalSelectionRange, textLength: storage.length)
+        tv.setSelectedRange(restoredSelection)
+        tv.scrollRangeToVisible(restoredSelection)
+    }
+
+    private func insertAIBlock(
+        actionTitle: String,
+        content: String,
+        insertionIndex: Int,
+        preserveSelection: NSRange?
+    ) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
         let blockID = UUID().uuidString
         let insertString = makeAIBlock(
-            actionTitle: action.blockTitle,
+            actionTitle: actionTitle,
             blockID: blockID,
-            content: cleaned,
+            content: content,
             leadingSpacing: leadingSpacing(at: insertionIndex, in: tv.string),
             trailingSpacing: "\n"
         )
@@ -304,7 +390,12 @@ class TextViewBridge {
         markRecentInsertion(in: tv, range: NSRange(location: insertionIndex, length: insertString.length))
 
         let cursor = insertionIndex + insertString.length - 1
-        tv.setSelectedRange(NSRange(location: cursor, length: 0))
+        if let preserveSelection {
+            let restoredSelection = clampedRange(preserveSelection, textLength: storage.length)
+            tv.setSelectedRange(restoredSelection)
+        } else {
+            tv.setSelectedRange(NSRange(location: cursor, length: 0))
+        }
         tv.didChangeText()
         tv.scrollRangeToVisible(NSRange(location: max(0, cursor - 1), length: 1))
     }
@@ -658,6 +749,12 @@ class TextViewBridge {
         let location = min(max(0, range.location), textLength)
         let length = min(max(0, range.length), textLength - location)
         return location + length
+    }
+
+    private func clampedRange(_ range: NSRange, textLength: Int) -> NSRange {
+        let location = min(max(0, range.location), textLength)
+        let length = min(max(0, range.length), textLength - location)
+        return NSRange(location: location, length: length)
     }
 
     private func markRecentInsertion(in textView: NSTextView, range: NSRange) {

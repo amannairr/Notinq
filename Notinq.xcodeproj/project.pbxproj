@@ -203,6 +203,7 @@
 				071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */,
 				071AAE83301E10B20076E7B7 /* SemanticChunker.swift */,
 				071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */,
+				079DD65D3059C64E008A107D /* Views */,
 			);
 			sourceTree = "<group>";
 		};
@@ -214,6 +215,21 @@
 				07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		079DD65D3059C64E008A107D /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				079DD65E3059C651008A107D /* Graph */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		079DD65E3059C651008A107D /* Graph */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Graph;
 			sourceTree = "<group>";
 		};
 		07B462932FA760E6009B2513 /* Models */ = {

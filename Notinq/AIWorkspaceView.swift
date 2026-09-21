@@ -10,8 +10,11 @@ struct AIWorkspaceView: View {
     @State private var messages: [AIWorkspaceMessage] = []
     @State private var isSending = false
     @State private var knowledgeContext: KnowledgeContext?
+    @State private var adaptiveTutorContext: AdaptiveTutorContext?
+    @State private var showTutorContext = false
     @State private var demoTrace: [String] = []
     @State private var currentExplanationMode: String = "intermediate"
+    private let recommendationEngine = LearningRecommendationEngine()
 
     private let actionColumns = [
         GridItem(.flexible(), spacing: 12),
@@ -68,12 +71,12 @@ struct AIWorkspaceView: View {
     private var headerCard: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("AI Assistant")
+                Text("Graph-Aware Tutor")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                 Text("Current Note: \(currentNoteLabel)")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text("Context-aware help tied to the active note.")
+                Text("Adaptive help using the active note, knowledge graph, and mastery state.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -168,7 +171,7 @@ struct AIWorkspaceView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             HStack {
-                Text("The assistant uses the current note for context.")
+                Text("The tutor uses the current note, graph context, and student mastery.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -319,6 +322,8 @@ struct AIWorkspaceView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                 evidenceSection
+                learningGapsSection
+                tutorContextInspectionSection
                 demoTraceSection
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -473,6 +478,7 @@ struct AIWorkspaceView: View {
         ) { bundle in
             let response = bundle.response
             knowledgeContext = bundle.context
+            adaptiveTutorContext = bundle.adaptiveContext
             currentExplanationMode = bundle.context.tutorContext.explanationStyle
             messages.append(
                 AIWorkspaceMessage(
@@ -510,6 +516,7 @@ struct AIWorkspaceView: View {
         ) { bundle in
             let response = bundle.response
             knowledgeContext = bundle.context
+            adaptiveTutorContext = bundle.adaptiveContext
             currentExplanationMode = bundle.context.tutorContext.explanationStyle
 
             if let concept = bundle.context.tutorContext.focusConcepts.first, let noteID {
@@ -547,6 +554,14 @@ struct AIWorkspaceView: View {
         let context = KnowledgeService.shared.buildContext(noteID: noteID, title: noteTitle, text: noteText)
         knowledgeContext = context
         currentExplanationMode = context.tutorContext.explanationStyle
+        Task {
+            let query = [PromptRegistry.shared.workspacePresetRequest(for: .explain), noteTitle, String(noteText.prefix(1_200))]
+                .joined(separator: "\n\n")
+            let adaptiveContext = try? await AdaptiveTutorService.shared.buildContext(question: query, noteID: noteID)
+            await MainActor.run {
+                adaptiveTutorContext = adaptiveContext
+            }
+        }
     }
 
     private func metaPill(title: String, value: String, tint: Color) -> some View {
@@ -653,6 +668,140 @@ struct AIWorkspaceView: View {
                     .padding(.vertical, 6)
             }
         }
+    }
+
+    private var learningGapsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Learning Gaps")
+                        .font(.headline)
+                    Text("Weak concepts and downstream topics they block.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            let adaptiveItems = adaptiveLearningGapItems
+            let recommendationItems = recommendationEngine.learningGaps(limit: 5)
+            let items = adaptiveItems.isEmpty ? recommendationItems : adaptiveItems
+
+            if items.isEmpty {
+                Text("No graph-backed learning gaps detected yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(items.prefix(5).enumerated()), id: \.offset) { _, item in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Weak: \(item.weakConcept)")
+                            .font(.caption.weight(.semibold))
+                        if item.blockedTopics.isEmpty {
+                            Text("No blocked downstream topics found.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Blocks: \(item.blockedTopics.prefix(4).joined(separator: ", "))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.white.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.bgElevated.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var tutorContextInspectionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    showTutorContext.toggle()
+                }
+            } label: {
+                HStack {
+                    Text("Show Tutor Context")
+                        .font(.headline)
+                    Spacer()
+                    Image(systemName: showTutorContext ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if showTutorContext {
+                if let context = adaptiveTutorContext {
+                    evidenceBlock(
+                        title: "Current Concepts",
+                        items: context.relevantConcepts.prefix(8).map(\.name),
+                        emptyMessage: "No current concepts available."
+                    )
+                    evidenceBlock(
+                        title: "Expanded Concepts",
+                        items: context.relatedConcepts.prefix(8).map(\.name),
+                        emptyMessage: "No expanded concepts available."
+                    )
+                    evidenceBlock(
+                        title: "Relationships",
+                        items: context.relationships.prefix(8).map { relationship in
+                            "\(relationship.sourceConceptID.uuidString.prefix(8)) \(relationship.type.title) \(relationship.destinationConceptID.uuidString.prefix(8))"
+                        },
+                        emptyMessage: "No graph relationships available."
+                    )
+                    evidenceBlock(
+                        title: "Weak Concepts",
+                        items: context.weakConcepts.prefix(8).map(\.name),
+                        emptyMessage: "No weak concepts in current context."
+                    )
+                    evidenceBlock(
+                        title: "Missing Prerequisites",
+                        items: context.missingPrerequisites.prefix(8).map(\.name),
+                        emptyMessage: "No missing prerequisites in current context."
+                    )
+                    contextMetric(title: "Retrieved Notes", value: "\(context.retrievedNotes.count)")
+                    contextMetric(title: "Prompt Size", value: "\(adaptivePromptWordCount(context)) words")
+                } else {
+                    Text("Ask a question or run a tutor action to populate adaptive context.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.bgElevated.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var adaptiveLearningGapItems: [LearningGapVisualizationItem] {
+        guard let context = adaptiveTutorContext else { return [] }
+        let weakConcepts = context.weakConcepts + context.knowledgeGaps
+        var seen: Set<UUID> = []
+        return weakConcepts.compactMap { concept in
+            guard seen.insert(concept.id).inserted else { return nil }
+            let blocked = context.relationships.compactMap { relationship -> String? in
+                guard relationship.destinationConceptID == concept.id else { return nil }
+                return context.relatedConcepts.first { $0.id == relationship.sourceConceptID }?.name
+                    ?? context.relevantConcepts.first { $0.id == relationship.sourceConceptID }?.name
+            }
+            return LearningGapVisualizationItem(
+                weakConcept: concept.name,
+                blockedTopics: Array(Set(blocked)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            )
+        }
+    }
+
+    private func adaptivePromptWordCount(_ context: AdaptiveTutorContext) -> Int {
+        AdaptivePromptBuilder()
+            .buildPrompt(from: context)
+            .split { $0.isWhitespace || $0.isNewline }
+            .count
     }
 
     private var demoTraceSection: some View {

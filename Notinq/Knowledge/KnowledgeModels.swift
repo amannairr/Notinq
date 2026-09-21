@@ -21,6 +21,14 @@ struct CanonicalConceptRecord: Identifiable, Codable, Equatable, Sendable {
     var description: String
 }
 
+struct CanonicalConcept: Identifiable, Codable, Equatable, Sendable {
+    var id: String
+    var canonicalName: String
+    var aliases: [String]
+    var createdAt: Date
+    var updatedAt: Date
+}
+
 struct KnowledgeEntityRecord: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var conceptID: String

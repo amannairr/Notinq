@@ -29,8 +29,19 @@ final class SearchService {
             )
         }
         .sorted {
+            let lhsDirectNoteMatch = Self.isDirectNoteMatch($0, query: request.query)
+            let rhsDirectNoteMatch = Self.isDirectNoteMatch($1, query: request.query)
+            if lhsDirectNoteMatch != rhsDirectNoteMatch { return lhsDirectNoteMatch }
             if $0.relevance != $1.relevance { return $0.relevance > $1.relevance }
             return $0.updatedAt > $1.updatedAt
         }
+    }
+
+    private static func isDirectNoteMatch(_ result: SearchResult, query: String) -> Bool {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard result.sourceKind == .note, normalizedQuery.isEmpty == false else { return false }
+        return result.title.lowercased().contains(normalizedQuery)
+            || result.content.lowercased().contains(normalizedQuery)
+            || result.preview.lowercased().contains(normalizedQuery)
     }
 }

@@ -39,6 +39,36 @@ enum PromptFragments {
         outputRules() + hallucinationRules() + jsonRules() + formattingRules()
     }
 
+    static func graphGroundingRules() -> [String] {
+        [
+            "Use the knowledge graph when answering.",
+            "Prefer graph relationships over isolated note text when they conflict.",
+            "Use prerequisite chains when teaching or sequencing study work.",
+            "Use shortest paths when explaining how concepts connect."
+        ]
+    }
+
+    static func graphContext(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return "" }
+        return """
+        Graph Context:
+        Use the knowledge graph below when answering.
+        Prefer graph relationships over isolated note text.
+        Use prerequisite chains when teaching.
+        Use shortest paths when explaining how concepts connect.
+
+        \(trimmed)
+        """
+    }
+
+    static func inputWithGraph(_ inputText: String, graphText: String) -> String {
+        [inputText, graphContext(graphText)]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+            .joined(separator: "\n\n")
+    }
+
     static func role(_ text: String) -> String {
         "Role:\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
     }

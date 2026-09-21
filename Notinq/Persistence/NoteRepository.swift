@@ -96,6 +96,9 @@ final class NoteRepository: NoteRepositoryProtocol {
         if trimmed.isEmpty {
             return try recentNotes(limit: limit)
         }
+        guard let ftsQuery = Self.ftsQuery(from: trimmed) else {
+            return try recentNotes(limit: limit)
+        }
 
         return try database.fetch(
             """
@@ -107,7 +110,7 @@ final class NoteRepository: NoteRepositoryProtocol {
             ORDER BY rank ASC
             LIMIT ?
             """,
-            bindings: [.text(trimmed), .integer(Int64(limit))]
+            bindings: [.text(ftsQuery), .integer(Int64(limit))]
         ).compactMap { row in
             guard
                 let noteID = UUID(uuidString: row.string("id") ?? ""),
@@ -262,6 +265,17 @@ final class NoteRepository: NoteRepositoryProtocol {
         let end = min(sanitized.count, lowerBound + 132)
         let snippet = String(sanitized[sanitized.index(sanitized.startIndex, offsetBy: start)..<sanitized.index(sanitized.startIndex, offsetBy: end)])
         return (start > 0 ? "..." : "") + snippet + (end < sanitized.count ? "..." : "")
+    }
+
+    private static func ftsQuery(from query: String) -> String? {
+        let tokens = query
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !tokens.isEmpty else { return nil }
+        return tokens.joined(separator: " ")
     }
 
     private static func string(from date: Date) -> String {

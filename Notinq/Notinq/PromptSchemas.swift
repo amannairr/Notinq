@@ -160,6 +160,7 @@ struct PromptBuildContext: Sendable {
     var structuredKnowledge: StructuredKnowledge?
     var knowledgeSnapshot: StudyKnowledgeSnapshot?
     var knowledgeGraph: KnowledgeGraph?
+    var graphContext: GraphContext?
     var tutorContext: TutorContext?
     var selectedText: String?
     var userRequest: String?
@@ -174,6 +175,7 @@ struct PromptBuildContext: Sendable {
         structuredKnowledge: StructuredKnowledge? = nil,
         knowledgeSnapshot: StudyKnowledgeSnapshot? = nil,
         knowledgeGraph: KnowledgeGraph? = nil,
+        graphContext: GraphContext? = nil,
         tutorContext: TutorContext? = nil,
         selectedText: String? = nil,
         userRequest: String? = nil,
@@ -187,6 +189,7 @@ struct PromptBuildContext: Sendable {
         self.structuredKnowledge = structuredKnowledge
         self.knowledgeSnapshot = knowledgeSnapshot
         self.knowledgeGraph = knowledgeGraph
+        self.graphContext = graphContext
         self.tutorContext = tutorContext
         self.selectedText = selectedText
         self.userRequest = userRequest
@@ -194,5 +197,9 @@ struct PromptBuildContext: Sendable {
         self.modelIdentifier = modelIdentifier
         self.noteSignature = noteSignature
         self.contextLimit = contextLimit
+    }
+
+    var graphPromptRepresentation: String {
+        graphContext?.graphPromptRepresentation() ?? ""
     }
 }

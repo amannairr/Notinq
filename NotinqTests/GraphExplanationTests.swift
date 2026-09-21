@@ -5,10 +5,13 @@ import XCTest
 final class GraphExplanationTests: XCTestCase {
     private var databaseURL: URL!
     private var database: SQLiteDatabase!
+    private var fixtureFolderID: UUID!
     private var studyRepository: StudyRepository!
     private var noteRepository: NoteRepository!
     private var knowledgeRepository: KnowledgeRepository!
     private var graphService: GraphExplanationService!
+    private var studyPlanGenerator: StudyPlanGenerator!
+    private var visualizationService: GraphVisualizationService!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -19,17 +22,32 @@ final class GraphExplanationTests: XCTestCase {
             .appendingPathExtension("sqlite")
 
         database = try SQLiteDatabase(url: databaseURL)
+        fixtureFolderID = UUID()
         studyRepository = StudyRepository(database: database)
         noteRepository = NoteRepository(database: database, studyRepository: studyRepository, performMigration: false)
         knowledgeRepository = KnowledgeRepository(database: database)
         graphService = GraphExplanationService(repository: knowledgeRepository)
+        studyPlanGenerator = StudyPlanGenerator(repository: knowledgeRepository, explanations: graphService)
+        visualizationService = GraphVisualizationService(repository: knowledgeRepository)
+
+        try database.execute(
+            "INSERT INTO folders (id, title, sort_order) VALUES (?, ?, ?)",
+            bindings: [
+                .text(fixtureFolderID.uuidString),
+                .text("Graph Tests"),
+                .integer(0)
+            ]
+        )
     }
 
     override func tearDownWithError() throws {
         graphService = nil
+        studyPlanGenerator = nil
+        visualizationService = nil
         knowledgeRepository = nil
         noteRepository = nil
         studyRepository = nil
+        fixtureFolderID = nil
         database = nil
 
         if let databaseURL {
@@ -155,15 +173,146 @@ final class GraphExplanationTests: XCTestCase {
         )
     }
 
+    func testKnowledgeGraphManagerReadsCanonicalSQLiteGraph() throws {
+        let noteID = try persistKnowledge(
+            noteTitle: "Graph Adapter",
+            concepts: [
+                makeConcept(id: "atp", name: "ATP"),
+                makeConcept(id: "mitochondria", name: "Mitochondria")
+            ],
+            relationships: [
+                makeRelationship(id: "atp-mito", sourceID: "atp", targetID: "mitochondria", kind: .requires)
+            ]
+        )
+
+        let manager = KnowledgeGraphManager(repository: knowledgeRepository)
+        let concepts = manager.concepts(for: noteID)
+        let relationships = manager.relationships(for: noteID)
+
+        XCTAssertEqual(concepts.map(\.name).sorted(), ["ATP", "Mitochondria"])
+        XCTAssertEqual(relationships.count, 1)
+        XCTAssertEqual(manager.prerequisites(of: try XCTUnwrap(concepts.first { $0.name == "ATP" })).map(\.name), ["Mitochondria"])
+    }
+
+    func testStudyPlanOrdersPrerequisitesBeforeWeakConceptAndDependents() throws {
+        try persistKnowledge(
+            noteTitle: "Calculus Plan",
+            concepts: [
+                makeConcept(id: "limits", name: "Limits"),
+                makeConcept(id: "derivatives", name: "Derivatives"),
+                makeConcept(id: "integrals", name: "Integrals"),
+                makeConcept(id: "differential-equations", name: "Differential Equations")
+            ],
+            relationships: [
+                makeRelationship(id: "derivatives-require-limits", sourceID: "derivatives", targetID: "limits", kind: .requires),
+                makeRelationship(id: "integrals-require-derivatives", sourceID: "integrals", targetID: "derivatives", kind: .requires),
+                makeRelationship(id: "de-require-integrals", sourceID: "differential-equations", targetID: "integrals", kind: .requires)
+            ]
+        )
+
+        let plan = studyPlanGenerator.prerequisiteStudyPlan(
+            for: "Differential Equations",
+            masteryScores: ["Integrals": 0.2]
+        )
+
+        XCTAssertEqual(plan.map(\.conceptName), ["Limits", "Derivatives", "Integrals", "Differential Equations"])
+        XCTAssertEqual(
+            studyPlanGenerator.reviewDependencies(for: "Integrals").map(\.conceptName),
+            ["Limits", "Derivatives"]
+        )
+    }
+
+    func testBottleneckDetectionRanksHighCentralityConcepts() throws {
+        try persistKnowledge(
+            noteTitle: "Cell Bottlenecks",
+            concepts: [
+                makeConcept(id: "cell", name: "Cell"),
+                makeConcept(id: "mitochondria", name: "Mitochondria"),
+                makeConcept(id: "ribosome", name: "Ribosome"),
+                makeConcept(id: "atp", name: "ATP")
+            ],
+            relationships: [
+                makeRelationship(id: "mito-require-cell", sourceID: "mitochondria", targetID: "cell", kind: .requires),
+                makeRelationship(id: "ribo-require-cell", sourceID: "ribosome", targetID: "cell", kind: .requires),
+                makeRelationship(id: "atp-require-mito", sourceID: "atp", targetID: "mitochondria", kind: .requires)
+            ]
+        )
+
+        let prep = studyPlanGenerator.graphBasedExamPreparation(limit: 2)
+
+        XCTAssertEqual(prep.first?.conceptName, "Mitochondria")
+        XCTAssertGreaterThanOrEqual(prep.first?.centrality ?? 0, 2)
+    }
+
+    func testLearningPathUsesTopologyBasedSequencing() throws {
+        try persistKnowledge(
+            noteTitle: "Calculus Path",
+            concepts: [
+                makeConcept(id: "limits", name: "Limits"),
+                makeConcept(id: "derivatives", name: "Derivatives"),
+                makeConcept(id: "integrals", name: "Integrals")
+            ],
+            relationships: [
+                makeRelationship(id: "derivatives-require-limits", sourceID: "derivatives", targetID: "limits", kind: .requires),
+                makeRelationship(id: "integrals-require-derivatives", sourceID: "integrals", targetID: "derivatives", kind: .requires)
+            ]
+        )
+
+        let path = studyPlanGenerator.learningPath(for: "Integrals")
+
+        XCTAssertEqual(path.beginner, ["Limits"])
+        XCTAssertEqual(path.intermediate, ["Derivatives"])
+        XCTAssertEqual(path.advanced, ["Integrals"])
+    }
+
+    func testVisualizationServiceBuildsCanonicalSubgraph() throws {
+        try persistKnowledge(
+            noteTitle: "Visualization",
+            concepts: [
+                makeConcept(id: "atp", name: "ATP", aliases: ["Adenosine Triphosphate"]),
+                makeConcept(id: "mitochondria", name: "Mitochondria"),
+                makeConcept(id: "organelle", name: "Organelle")
+            ],
+            relationships: [
+                makeRelationship(id: "atp-mito", sourceID: "atp", targetID: "mitochondria", kind: .partOf),
+                makeRelationship(id: "mito-organelle", sourceID: "mitochondria", targetID: "organelle", kind: .partOf)
+            ]
+        )
+
+        let graph = visualizationService.graphForTopic("Adenosine Triphosphate")
+
+        XCTAssertEqual(graph.nodes.map(\.title).sorted(), ["ATP", "Mitochondria", "Organelle"])
+        XCTAssertEqual(graph.edges.map(\.relationshipType), [KnowledgeRelationshipKind.partOf.rawValue, KnowledgeRelationshipKind.partOf.rawValue])
+    }
+
+    @discardableResult
     private func persistKnowledge(
         noteTitle: String,
         concepts: [KnowledgeConcept],
         relationships: [KnowledgeRelationship]
-    ) throws {
+    ) throws -> UUID {
         let noteID = UUID()
         var extraction = StructuredKnowledge(title: noteTitle)
         extraction.concepts = concepts
         extraction.relationships = relationships
+
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            INSERT INTO notes (id, folder_id, title, content, created_at, updated_at, note_order, study_data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(noteID.uuidString),
+                .text(fixtureFolderID.uuidString),
+                .text(noteTitle),
+                .text(noteTitle),
+                .text(timestamp),
+                .text(timestamp),
+                .integer(0),
+                .text("{}")
+            ]
+        )
 
         try knowledgeRepository.persist(
             noteID: noteID,
@@ -172,6 +321,7 @@ final class GraphExplanationTests: XCTestCase {
             chunks: [],
             extraction: extraction
         )
+        return noteID
     }
 
     private func makeConcept(id: String, name: String, aliases: [String] = []) -> KnowledgeConcept {
