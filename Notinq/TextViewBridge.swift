@@ -301,27 +301,35 @@ class TextViewBridge {
         action: AIEditorAction,
         response: String,
         selectionRange: NSRange,
-        provenance: AIProposalProvenance = AIProposalProvenance()
+        originatingNoteID: UUID? = nil,
+        originatingRequestID: UUID = UUID(),
+        documentSnapshot: DocumentSnapshot? = nil,
+        provenance: AIProposalProvenance = AIProposalProvenance(),
+        adaptiveExplanationContext: AdaptiveExplanationContext? = nil
     ) -> AIProposal? {
         guard let tv = textView, let storage = tv.textStorage else { return nil }
         let cleaned = Self.cleanGeneratedText(response)
         guard !cleaned.isEmpty else { return nil }
 
-        let originalSelection = tv.selectedRange()
         let clampedSelection = clampedRange(selectionRange, textLength: storage.length)
         let originalText = clampedSelection.length > 0
             ? (tv.string as NSString).substring(with: clampedSelection)
             : ""
         let insertionIndex = safeInsertionIndex(after: clampedSelection, textLength: storage.length)
-        tv.setSelectedRange(originalSelection)
+        tv.setSelectedRange(clampedSelection)
 
         return AIProposal(
             action: action,
             originalText: originalText,
             generatedText: cleaned,
             insertionRange: NSRange(location: insertionIndex, length: 0),
-            originalSelectionRange: originalSelection,
-            provenance: provenance
+            originalSelectionRange: clampedSelection,
+            originatingNoteID: originatingNoteID,
+            originatingRequestID: originatingRequestID,
+            documentSnapshot: documentSnapshot,
+            provenance: provenance,
+            adaptiveExplanationContext: adaptiveExplanationContext,
+            state: .ready
         )
     }
 
@@ -344,6 +352,7 @@ class TextViewBridge {
 
         accepted.generatedText = content
         accepted.status = editedText == nil ? .accepted : .edited
+        accepted.state = .accepted
         return accepted
     }
 
@@ -351,12 +360,16 @@ class TextViewBridge {
         var edited = proposal
         edited.generatedText = generatedText
         edited.status = .edited
+        if edited.state != .stale {
+            edited.state = .ready
+        }
         return edited
     }
 
     func rejectAIProposal(_ proposal: AIProposal) -> AIProposal {
         var rejected = proposal
         rejected.status = .rejected
+        rejected.state = .rejected
         return rejected
     }
 

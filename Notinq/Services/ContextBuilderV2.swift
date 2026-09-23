@@ -5,6 +5,7 @@ final class ContextBuilderV2 {
     private let repository: KnowledgeRepository
     private let studentConceptService: StudentConceptService
     private let studyRepository: StudyRepository
+    private let noteRepository: NoteRepository
     private let graphExpansion: GraphExpansionService
     private let graphContextBuilder: GraphContextBuilder
     private let gapDetector: KnowledgeGapDetector
@@ -14,6 +15,7 @@ final class ContextBuilderV2 {
         repository: KnowledgeRepository = .shared,
         studentConceptService: StudentConceptService = .shared,
         studyRepository: StudyRepository = .shared,
+        noteRepository: NoteRepository = .shared,
         graphExpansion: GraphExpansionService? = nil,
         graphContextBuilder: GraphContextBuilder? = nil,
         gapDetector: KnowledgeGapDetector? = nil
@@ -22,6 +24,7 @@ final class ContextBuilderV2 {
         self.repository = repository
         self.studentConceptService = studentConceptService
         self.studyRepository = studyRepository
+        self.noteRepository = noteRepository
         self.graphExpansion = graphExpansion ?? GraphExpansionService(repository: repository)
         self.graphContextBuilder = graphContextBuilder ?? GraphContextBuilder(repository: repository)
         self.gapDetector = gapDetector ?? KnowledgeGapDetector(repository: repository)
@@ -32,8 +35,13 @@ final class ContextBuilderV2 {
         noteID: UUID?
     ) async throws -> AdaptiveTutorContext {
         let hits = retriever.retrieve(query: question, limit: 24)
-        let scopedHits = noteID.map { id in hits.filter { $0.noteID == id } } ?? hits
-        let retrievedNotes = scopedHits.map(Self.retrievedChunk(from:))
+        let scopedHits = noteID.map { id in
+            let noteHits = hits.filter { $0.noteID == id }
+            return noteHits.isEmpty ? hits : noteHits
+        } ?? hits
+        let retrievedNotes = scopedHits.isEmpty
+            ? fallbackRetrievedNotes(noteID: noteID, question: question)
+            : scopedHits.map(Self.retrievedChunk(from:))
         let seedConcepts = try seedConcepts(from: scopedHits, question: question)
         let expandedConcepts = graphExpansion.expand(question: question, seedConcepts: seedConcepts)
         let relationships = graphExpansion.relationships(for: expandedConcepts)
@@ -118,9 +126,41 @@ final class ContextBuilderV2 {
         )
     }
 
+    private func fallbackRetrievedNotes(noteID: UUID?, question: String) -> [RetrievedChunk] {
+        guard let noteID else { return [] }
+        if let note = (try? noteRepository.loadFolders())?
+                .flatMap(\.notes)
+                .first(where: { $0.id == noteID }) {
+            return [
+                RetrievedChunk(
+                    id: "note-\(note.id.uuidString)",
+                    noteID: note.id,
+                    noteTitle: note.title,
+                    title: note.title,
+                    content: note.content,
+                    snippet: String(note.content.prefix(240)),
+                    sourceType: .note,
+                    relevance: 0.1
+                )
+            ]
+        }
+        return [
+            RetrievedChunk(
+                id: "note-\(noteID.uuidString)",
+                noteID: noteID,
+                noteTitle: "Current Note",
+                title: "Current Note",
+                content: question,
+                snippet: question,
+                sourceType: .note,
+                relevance: 0.01
+            )
+        ]
+    }
+
     private func concepts(matching records: [StudentConceptRecord], within concepts: [Concept]) -> [Concept] {
-        let byID = Dictionary(uniqueKeysWithValues: concepts.map { ($0.id, $0) })
-        let byName = Dictionary(uniqueKeysWithValues: concepts.map { (normalizedKey($0.name), $0) })
+        let byID = Dictionary(concepts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let byName = Dictionary(concepts.map { (normalizedKey($0.name), $0) }, uniquingKeysWith: { first, _ in first })
         return dedupeConcepts(records.compactMap { record in
             if let id = UUID(uuidString: record.conceptID), let concept = byID[id] {
                 return concept

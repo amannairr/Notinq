@@ -564,7 +564,10 @@ final class HybridRetriever {
          - Low-mastery concepts receive a small boost so the tutor can surface weak areas first.
          */
         let queryTokens = Set(query.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.isEmpty == false })
-        let masteryLookup = Dictionary(uniqueKeysWithValues: (try? studentConceptService.recentlyReviewedConcepts(limit: 32))?.map { ($0.conceptID, $0.masteryScore) } ?? [])
+        let masteryLookup = Dictionary(
+            (try? studentConceptService.recentlyReviewedConcepts(limit: 32))?.map { ($0.conceptID, $0.masteryScore) } ?? [],
+            uniquingKeysWith: max
+        )
 
         return (lexical.map { weighted($0, base: 1.0, queryTokens: queryTokens, masteryLookup: masteryLookup) }
             + graph.map { weighted($0, base: 0.86, queryTokens: queryTokens, masteryLookup: masteryLookup) }

@@ -16,12 +16,16 @@ struct AITextView: NSViewRepresentable {
     var onSelectionChange: ((String, NSRange) -> Void)?
     
     var onReady: ((TextViewBridge) -> Void)?
-    
+
+    var areProposalActionsDisabled = false
     var onSummarize: (() -> Void)?
     var onExpand: (() -> Void)?
     var onSimplify: (() -> Void)?
     var onRewrite: (() -> Void)?
     var onExplain: (() -> Void)?
+    var onExample: (() -> Void)?
+    var onAnalogy: (() -> Void)?
+    var onDontUnderstand: (() -> Void)?
     var onFlashcards: (() -> Void)?
     var onQuiz: (() -> Void)?
     var onAdd: (() -> Void)?
@@ -222,11 +226,15 @@ struct AITextView: NSViewRepresentable {
 
             let hosting = NSHostingView(
                 rootView: SelectionToolbarView(
+                    areProposalActionsDisabled: self.parent.areProposalActionsDisabled,
                     onSummarize: { self.parent.onSummarize?() },
                     onExpand: { self.parent.onExpand?() },
                     onSimplify: { self.parent.onSimplify?() },
                     onRewrite: { self.parent.onRewrite?() },
                     onExplain: { self.parent.onExplain?() },
+                    onExample: { self.parent.onExample?() },
+                    onAnalogy: { self.parent.onAnalogy?() },
+                    onDontUnderstand: { self.parent.onDontUnderstand?() },
                     onFlashcards: { self.parent.onFlashcards?() },
                     onQuiz: { self.parent.onQuiz?() },
                     onAdd: { self.parent.onAdd?() },

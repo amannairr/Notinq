@@ -518,9 +518,9 @@ final class LearningEngine {
         var snapshot = knowledge.legacySnapshotRepresentation()
         guard !knowledge.concepts.isEmpty else { return snapshot }
 
-        let conceptByID = Dictionary(uniqueKeysWithValues: knowledge.concepts.map { ($0.id, $0) })
-        let titleByID = Dictionary(uniqueKeysWithValues: knowledge.concepts.map { ($0.id, $0.name) })
-        let idByNormalizedTitle = Dictionary(uniqueKeysWithValues: knowledge.concepts.map { (normalizedConceptKey($0.name), $0.id) })
+        let conceptByID = Dictionary(knowledge.concepts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let titleByID = Dictionary(knowledge.concepts.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let idByNormalizedTitle = Dictionary(knowledge.concepts.map { (normalizedConceptKey($0.name), $0.id) }, uniquingKeysWith: { first, _ in first })
         let memoryByKey = currentStudyData.learningMemory.reduce(into: [String: StudyMemoryEntry]()) { result, entry in
             result[normalizedConceptKey(entry.concept)] = entry
         }
@@ -556,7 +556,7 @@ final class LearningEngine {
             .sorted { $0.importance > $1.importance }
             .forEach { visit($0.id) }
 
-        let rankByID = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($0.element, $0.offset) })
+        let rankByID = Dictionary(orderedIDs.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
         snapshot.concepts = snapshot.concepts.map { item in
             guard let conceptID = idByNormalizedTitle[normalizedConceptKey(item.title)] else { return item }
             var adjusted = item

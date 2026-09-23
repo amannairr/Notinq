@@ -12,10 +12,10 @@ final class KnowledgeGapDetector {
         relationships: [ConceptRelationship],
         mastery: [StudentConceptRecord]
     ) -> [KnowledgeGap] {
-        let conceptsByID = Dictionary(uniqueKeysWithValues: concepts.map { ($0.id, $0) })
-        let conceptsByName = Dictionary(uniqueKeysWithValues: concepts.map { (normalizedKey($0.name), $0) })
-        let masteryByID = Dictionary(uniqueKeysWithValues: mastery.map { ($0.conceptID, $0.effectiveMasteryScore) })
-        let masteryByName = Dictionary(uniqueKeysWithValues: mastery.map { (normalizedKey($0.conceptID), $0.effectiveMasteryScore) })
+        let conceptsByID = Dictionary(concepts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let conceptsByName = Dictionary(concepts.map { (normalizedKey($0.name), $0) }, uniquingKeysWith: { first, _ in first })
+        let masteryByID = Dictionary(mastery.map { ($0.conceptID, $0.effectiveMasteryScore) }, uniquingKeysWith: max)
+        let masteryByName = Dictionary(mastery.map { (normalizedKey($0.conceptID), $0.effectiveMasteryScore) }, uniquingKeysWith: max)
         var gapsByID: [UUID: KnowledgeGap] = [:]
 
         func masteryScore(for concept: Concept) -> Double {

@@ -188,7 +188,7 @@ nonisolated final class StudyPlannerService {
         let dueTodayTasks = reviewScheduler.dueToday(limit: 8).enumerated().map { index, review in
             StudyTask(
                 concept: review.conceptName,
-                priority: 1.05 + review.urgency - Double(index) * 0.01,
+                priority: 0.76 + review.urgency * 0.05 - Double(index) * 0.01,
                 reason: .reviewDue,
                 estimatedMinutes: defaultTaskMinutes,
                 prerequisiteDepth: -1
@@ -293,6 +293,11 @@ nonisolated final class StudyPlannerService {
     }
 
     private func taskSort(_ lhs: StudyTask, _ rhs: StudyTask) -> Bool {
+        let lhsReasonRank = sortReasonRank(lhs)
+        let rhsReasonRank = sortReasonRank(rhs)
+        if lhsReasonRank != rhsReasonRank {
+            return lhsReasonRank > rhsReasonRank
+        }
         if lhs.prerequisiteDepth != rhs.prerequisiteDepth {
             return lhs.prerequisiteDepth < rhs.prerequisiteDepth
         }
@@ -305,11 +310,24 @@ nonisolated final class StudyPlannerService {
         return lhs.concept.localizedCaseInsensitiveCompare(rhs.concept) == .orderedAscending
     }
 
+    private func sortReasonRank(_ task: StudyTask) -> Int {
+        if task.reason == .reviewDue && task.priority >= 1.0 {
+            return 6
+        }
+        switch task.reason {
+        case .missingPrerequisite: return 5
+        case .weakConcept: return 4
+        case .reviewDue: return 3
+        case .examPreparation: return 2
+        case .highDependencyConcept: return 1
+        }
+    }
+
     private func duplicateTaskSort(_ lhs: StudyTask, _ rhs: StudyTask) -> Bool {
-        if lhs.reason == .reviewDue, lhs.priority >= 1.0, !(rhs.reason == .reviewDue && rhs.priority >= 1.0) {
+        if isHighPriorityReview(lhs), !isHighPriorityReview(rhs) {
             return true
         }
-        if rhs.reason == .reviewDue, rhs.priority >= 1.0, !(lhs.reason == .reviewDue && lhs.priority >= 1.0) {
+        if isHighPriorityReview(rhs), !isHighPriorityReview(lhs) {
             return false
         }
         let lhsReason = duplicateReasonRank(lhs.reason)
@@ -321,6 +339,10 @@ nonisolated final class StudyPlannerService {
             return lhs.priority > rhs.priority
         }
         return lhs.prerequisiteDepth > rhs.prerequisiteDepth
+    }
+
+    private func isHighPriorityReview(_ task: StudyTask) -> Bool {
+        task.reason == .reviewDue && task.priority >= 1.0
     }
 
     private func duplicateReasonRank(_ reason: StudyTaskReason) -> Int {

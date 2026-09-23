@@ -19,13 +19,15 @@ private func makeProposalBridge(text: String, selection: NSRange) -> (TextViewBr
 
 private final class MockAIProposalGenerator: AIProposalGenerating {
     var response: String
+    var adaptiveExplanationContext: AdaptiveExplanationContext?
     private(set) var action: AIEditorAction?
     private(set) var selectedText = ""
     private(set) var noteContext = ""
     private(set) var noteID: UUID?
 
-    init(response: String) {
+    init(response: String, adaptiveExplanationContext: AdaptiveExplanationContext? = nil) {
         self.response = response
+        self.adaptiveExplanationContext = adaptiveExplanationContext
     }
 
     func generate(
@@ -33,13 +35,86 @@ private final class MockAIProposalGenerator: AIProposalGenerating {
         selectedText: String,
         noteContext: String,
         noteID: UUID?,
-        completion: @escaping (String) -> Void
-    ) {
+        requestID: UUID,
+        completion: @escaping (UUID, AIProposalGenerationResult) -> Void
+    ) -> Task<Void, Never>? {
         self.action = action
         self.selectedText = selectedText
         self.noteContext = noteContext
         self.noteID = noteID
-        completion(response)
+        completion(
+            requestID,
+            AIProposalGenerationResult(
+                generatedText: response,
+                adaptiveExplanationContext: adaptiveExplanationContext
+            )
+        )
+        return nil
+    }
+}
+
+private final class DeferredAIProposalGenerator: AIProposalGenerating {
+    private(set) var requestIDs: [UUID] = []
+    private var completions: [UUID: (UUID, AIProposalGenerationResult) -> Void] = [:]
+
+    func generate(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID?,
+        requestID: UUID,
+        completion: @escaping (UUID, AIProposalGenerationResult) -> Void
+    ) -> Task<Void, Never>? {
+        requestIDs.append(requestID)
+        completions[requestID] = completion
+        return nil
+    }
+
+    func complete(
+        requestID: UUID,
+        response: String = "Deferred response.",
+        adaptiveExplanationContext: AdaptiveExplanationContext? = nil
+    ) {
+        completions[requestID]?(
+            requestID,
+            AIProposalGenerationResult(generatedText: response, adaptiveExplanationContext: adaptiveExplanationContext)
+        )
+    }
+}
+
+private final class CancellableAIProposalGenerator: AIProposalGenerating {
+    private(set) var requestIDs: [UUID] = []
+    private(set) var tasks: [UUID: Task<Void, Never>] = [:]
+    private var completions: [UUID: (UUID, AIProposalGenerationResult) -> Void] = [:]
+
+    func generate(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID?,
+        requestID: UUID,
+        completion: @escaping (UUID, AIProposalGenerationResult) -> Void
+    ) -> Task<Void, Never>? {
+        requestIDs.append(requestID)
+        completions[requestID] = completion
+        let task = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+        tasks[requestID] = task
+        return task
+    }
+
+    func complete(requestID: UUID, response: String) {
+        completions[requestID]?(
+            requestID,
+            AIProposalGenerationResult(generatedText: response, adaptiveExplanationContext: nil)
+        )
+    }
+
+    func isCancelled(_ requestID: UUID) -> Bool {
+        tasks[requestID]?.isCancelled ?? false
     }
 }
 
@@ -205,6 +280,7 @@ final class NotinqTests: XCTestCase {
     func testExpandAppearsForNonEmptySelection() {
         XCTAssertTrue(SelectionToolbarView.isVisible(for: NSRange(location: 4, length: 12)))
         XCTAssertTrue(SelectionToolbarView.actionLabels.contains("Expand"))
+        XCTAssertTrue(SelectionToolbarView.actionLabels.contains("I Don't Understand This"))
     }
 
     func testExpandDoesNotAppearForEmptySelection() {
@@ -222,7 +298,8 @@ final class NotinqTests: XCTestCase {
     }
 
     func testSupplementalStudySectionsBehaveLikeSingleOpenAccordion() {
-        XCTAssertEqual(SupplementalStudySection.allCases.count, 7)
+        XCTAssertEqual(SupplementalStudySection.allCases.count, 8)
+        XCTAssertEqual(SupplementalStudySection.teachMe.rawValue, "Teach Me")
         XCTAssertEqual(SupplementalStudySection.learningMemory.rawValue, "Learning Memory")
         XCTAssertEqual(SupplementalStudySection.knowledgeGaps.icon, "exclamationmark.triangle")
         XCTAssertEqual(SupplementalStudySection.examPrep.id, "Exam Prep")
@@ -747,6 +824,28 @@ final class NotinqTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange(), originalSelection)
     }
 
+    func testAIProposalRestoresCapturedSelectionIfSelectionDriftsDuringGeneration() {
+        let originalSelection = NSRange(location: 6, length: 4)
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+        guard let proposal = bridge.makeAIProposal(
+            action: .expand,
+            response: "Expanded beta.",
+            selectionRange: originalSelection
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        XCTAssertEqual(proposal.originalText, "beta")
+        XCTAssertEqual(proposal.originalSelectionRange, originalSelection)
+        XCTAssertEqual(textView.selectedRange(), originalSelection)
+
+        _ = bridge.acceptAIProposal(proposal)
+        XCTAssertEqual(textView.selectedRange(), originalSelection)
+    }
+
     func testAcceptedAIProposalRendersMarkdownInsteadOfRawMarkdown() {
         let (bridge, textView) = makeProposalBridge(text: "Start", selection: NSRange(location: 5, length: 0))
         guard let proposal = bridge.makeAIProposal(
@@ -860,8 +959,9 @@ final class NotinqTests: XCTestCase {
             generator: MockAIProposalGenerator(response: "Beta is the second Greek letter.")
         )
 
-        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
-        let accepted = coordinator.acceptProposal()
+        let noteID = UUID()
+        coordinator.beginExpand(noteContext: textView.string, noteID: noteID)
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteID)
 
         XCTAssertEqual(accepted?.status, .accepted)
         XCTAssertTrue(textView.string.contains("Alpha beta"))
@@ -894,9 +994,10 @@ final class NotinqTests: XCTestCase {
             generator: MockAIProposalGenerator(response: "Original expansion.")
         )
 
-        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
+        let noteID = UUID()
+        coordinator.beginExpand(noteContext: textView.string, noteID: noteID)
         coordinator.editProposal(text: "Edited expansion.")
-        let accepted = coordinator.acceptProposal()
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteID)
 
         XCTAssertEqual(accepted?.status, .accepted)
         XCTAssertTrue(textView.string.contains("Edited expansion."))
@@ -914,8 +1015,9 @@ final class NotinqTests: XCTestCase {
             """)
         )
 
-        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
-        _ = coordinator.acceptProposal()
+        let noteID = UUID()
+        coordinator.beginExpand(noteContext: textView.string, noteID: noteID)
+        _ = coordinator.acceptProposal(selectedNoteID: noteID)
 
         XCTAssertFalse(textView.string.contains("##"))
         XCTAssertFalse(textView.string.contains("**"))
@@ -930,8 +1032,9 @@ final class NotinqTests: XCTestCase {
             generator: MockAIProposalGenerator(response: "Beta expansion.")
         )
 
-        coordinator.beginExpand(noteContext: textView.string, noteID: UUID())
-        _ = coordinator.acceptProposal()
+        let noteID = UUID()
+        coordinator.beginExpand(noteContext: textView.string, noteID: noteID)
+        _ = coordinator.acceptProposal(selectedNoteID: noteID)
 
         let insertedRange = (textView.string as NSString).range(of: "Beta expansion.")
         let role = textView.textStorage?.attribute(NSAttributedString.Key.aiBlockRole, at: insertedRange.location, effectiveRange: nil) as? String
@@ -959,8 +1062,9 @@ final class NotinqTests: XCTestCase {
             generator: MockAIProposalGenerator(response: "Beta is expanded.")
         )
 
-        acceptCoordinator.beginExpand(noteContext: acceptTextView.string, noteID: UUID())
-        _ = acceptCoordinator.acceptProposal()
+        let acceptNoteID = UUID()
+        acceptCoordinator.beginExpand(noteContext: acceptTextView.string, noteID: acceptNoteID)
+        _ = acceptCoordinator.acceptProposal(selectedNoteID: acceptNoteID)
 
         XCTAssertTrue(acceptTextView.string.contains("Beta is expanded."))
         XCTAssertEqual(acceptTextView.selectedRange(), originalSelection)
@@ -979,6 +1083,1390 @@ final class NotinqTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Gradient descent updates weights."))
         XCTAssertTrue(prompt.contains("Surrounding note context:"))
         XCTAssertTrue(prompt.contains("do not let unrelated context override the selected idea"))
+    }
+
+    func testEditorActionFrameworkCreatesProposalForEveryAction() {
+        for action in AIEditorAction.allCases {
+            let (bridge, _) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+            let generator = MockAIProposalGenerator(response: "\(action.displayTitle) response.")
+            let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+            coordinator.begin(action: action, noteContext: "Alpha beta gamma", noteID: UUID())
+
+            XCTAssertEqual(generator.action, action)
+            XCTAssertEqual(coordinator.proposal?.action, action)
+            XCTAssertEqual(coordinator.proposal?.status, .pending)
+            XCTAssertEqual(coordinator.proposal?.originalText, "beta")
+        }
+    }
+
+    func testEditorActionFrameworkDoesNotMutateDocumentBeforeAccept() {
+        for action in AIEditorAction.allCases {
+            let originalSelection = NSRange(location: 6, length: 4)
+            let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+            let coordinator = AIProposalCoordinator(
+                bridge: bridge,
+                generator: MockAIProposalGenerator(response: "\(action.displayTitle) response.")
+            )
+
+            coordinator.begin(action: action, noteContext: textView.string, noteID: UUID())
+            coordinator.editProposal(text: "Edited \(action.displayTitle) response.")
+
+            XCTAssertEqual(textView.string, "Alpha beta gamma")
+            XCTAssertEqual(textView.selectedRange(), originalSelection)
+            XCTAssertEqual(coordinator.proposal?.status, .edited)
+        }
+    }
+
+    func testEditorActionFrameworkAcceptRejectAndEditAcceptUseSharedProposalFlow() {
+        let originalSelection = NSRange(location: 6, length: 4)
+
+        for action in AIEditorAction.allCases {
+            let (acceptBridge, acceptTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+            let acceptCoordinator = AIProposalCoordinator(
+                bridge: acceptBridge,
+                generator: MockAIProposalGenerator(response: "**\(action.displayTitle)** response.")
+            )
+            let acceptNoteID = UUID()
+            acceptCoordinator.begin(action: action, noteContext: acceptTextView.string, noteID: acceptNoteID)
+            _ = acceptCoordinator.acceptProposal(selectedNoteID: acceptNoteID)
+
+            XCTAssertTrue(acceptTextView.string.contains(action.blockTitle))
+            XCTAssertTrue(acceptTextView.string.contains("\(action.displayTitle) response."))
+            XCTAssertFalse(acceptTextView.string.contains("**"))
+            let acceptedRange = (acceptTextView.string as NSString).range(of: "\(action.displayTitle) response.")
+            let acceptedRole = acceptTextView.textStorage?.attribute(.aiBlockRole, at: acceptedRange.location, effectiveRange: nil) as? String
+            let acceptedAt = acceptTextView.textStorage?.attribute(.aiBlockInsertedAt, at: acceptedRange.location, effectiveRange: nil) as? Date
+            XCTAssertEqual(acceptedRole, "content")
+            XCTAssertNotNil(acceptedAt)
+            XCTAssertEqual(acceptTextView.selectedRange(), originalSelection)
+
+            let (rejectBridge, rejectTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+            let rejectCoordinator = AIProposalCoordinator(
+                bridge: rejectBridge,
+                generator: MockAIProposalGenerator(response: "\(action.displayTitle) response.")
+            )
+            rejectCoordinator.begin(action: action, noteContext: rejectTextView.string, noteID: UUID())
+            _ = rejectCoordinator.rejectProposal()
+            XCTAssertEqual(rejectTextView.string, "Alpha beta gamma")
+            XCTAssertEqual(rejectTextView.selectedRange(), originalSelection)
+
+            let (editBridge, editTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: originalSelection)
+            let editCoordinator = AIProposalCoordinator(
+                bridge: editBridge,
+                generator: MockAIProposalGenerator(response: "Original \(action.displayTitle) response.")
+            )
+            let editNoteID = UUID()
+            editCoordinator.begin(action: action, noteContext: editTextView.string, noteID: editNoteID)
+            editCoordinator.editProposal(text: "Edited \(action.displayTitle) response.")
+            _ = editCoordinator.acceptProposal(selectedNoteID: editNoteID)
+            XCTAssertTrue(editTextView.string.contains("Edited \(action.displayTitle) response."))
+            XCTAssertFalse(editTextView.string.contains("Original \(action.displayTitle) response."))
+        }
+    }
+
+    func testEditorActionPromptBuilderUsesCorrectTemplateForEachAction() {
+        let selectedText = "Gradient descent updates weights."
+        let noteContext = "Neural network notes mention loss functions."
+        let expectations: [AIEditorAction: String] = [
+            .expand: "Expand the selected idea",
+            .explain: "why it matters",
+            .simplify: "lower the reading difficulty",
+            .example: "concrete educational example",
+            .analogy: "intuitive educational analogy",
+            .dontUnderstand: "STUDENT CONTEXT"
+        ]
+
+        for action in AIEditorAction.allCases {
+            let prompt = AIActionPromptBuilder().prompt(
+                action: action,
+                selectedText: selectedText,
+                noteContext: noteContext
+            )
+
+            XCTAssertTrue(prompt.contains(expectations[action] ?? ""))
+            XCTAssertTrue(prompt.contains(action == .dontUnderstand ? "SELECTED CONTENT" : "Selected text:"))
+            XCTAssertTrue(prompt.contains(selectedText))
+            if action == .dontUnderstand {
+                XCTAssertTrue(prompt.contains("SOURCE MATERIAL"))
+                XCTAssertTrue(prompt.contains("GROUNDING RULES"))
+            } else {
+                XCTAssertTrue(prompt.contains("Surrounding note context:"))
+                XCTAssertTrue(prompt.contains(noteContext))
+            }
+            XCTAssertTrue(prompt.contains("Return clean Markdown"))
+        }
+    }
+
+    func testProposalPreviewLabelsGeneratedContentByAction() {
+        XCTAssertEqual(AIEditorAction.expand.previewTitle, "EXPANDED")
+        XCTAssertEqual(AIEditorAction.explain.previewTitle, "EXPLAINED")
+        XCTAssertEqual(AIEditorAction.simplify.previewTitle, "SIMPLIFIED")
+        XCTAssertEqual(AIEditorAction.example.previewTitle, "EXAMPLE")
+        XCTAssertEqual(AIEditorAction.analogy.previewTitle, "ANALOGY")
+        XCTAssertEqual(AIEditorAction.dontUnderstand.previewTitle, "ADAPTIVE EXPLANATION")
+    }
+
+    func testDontUnderstandPromptAdaptsBeforeExplaining() {
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation applies the chain rule.",
+            noteContext: "The student has already studied derivatives but struggles with neural network layers."
+        )
+
+        XCTAssertTrue(prompt.contains("STUDENT CONTEXT"))
+        XCTAssertTrue(prompt.contains("Learner level: Unknown"))
+        XCTAssertTrue(prompt.contains("SOURCE MATERIAL"))
+        XCTAssertTrue(prompt.contains("Source grounding unavailable"))
+        XCTAssertTrue(prompt.contains("GROUNDING RULES"))
+        XCTAssertTrue(prompt.contains("Explain the selected content at the appropriate level"))
+        XCTAssertTrue(prompt.contains("Backpropagation applies the chain rule."))
+    }
+
+    func testDontUnderstandProposalAttachesAdaptiveContext() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Chain Rule"],
+            strongConcepts: ["Derivatives"],
+            missingPrerequisites: ["Partial Derivatives"],
+            retrievedNoteSources: [
+                AdaptiveExplanationSource(noteTitle: "Backpropagation Notes", sectionTitle: "Gradients", snippet: "Chain rule through layers.")
+            ],
+            inferredLearnerLevel: "Needs prerequisite support",
+            confidence: 0.72
+        )
+        let (bridge, textView) = makeProposalBridge(text: "Backpropagation applies the chain rule.", selection: NSRange(location: 0, length: 15))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Adaptive explanation.", adaptiveExplanationContext: context)
+        )
+
+        coordinator.begin(action: .dontUnderstand, noteContext: textView.string, noteID: UUID())
+
+        XCTAssertEqual(coordinator.proposal?.adaptiveExplanationContext, context)
+        XCTAssertEqual(coordinator.proposal?.adaptiveExplanationContext?.missingPrerequisites.first, "Partial Derivatives")
+    }
+
+    func testAdaptiveContextSurvivesAcceptRejectAndEdit() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Recursion"],
+            strongConcepts: ["Functions"],
+            missingPrerequisites: ["Call Stack"],
+            retrievedNoteSources: [AdaptiveExplanationSource(noteTitle: "Algorithms", snippet: "Recursive calls use stack frames.")],
+            inferredLearnerLevel: "Developing understanding",
+            confidence: 0.68
+        )
+        let selection = NSRange(location: 6, length: 4)
+
+        let (acceptBridge, acceptTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let acceptCoordinator = AIProposalCoordinator(
+            bridge: acceptBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        let acceptNoteID = UUID()
+        acceptCoordinator.begin(action: .dontUnderstand, noteContext: acceptTextView.string, noteID: acceptNoteID)
+        let accepted = acceptCoordinator.acceptProposal(selectedNoteID: acceptNoteID)
+        XCTAssertEqual(accepted?.adaptiveExplanationContext, context)
+
+        let (rejectBridge, rejectTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let rejectCoordinator = AIProposalCoordinator(
+            bridge: rejectBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        rejectCoordinator.begin(action: .dontUnderstand, noteContext: rejectTextView.string, noteID: UUID())
+        let rejected = rejectCoordinator.rejectProposal()
+        XCTAssertEqual(rejected?.adaptiveExplanationContext, context)
+
+        let (editBridge, editTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let editCoordinator = AIProposalCoordinator(
+            bridge: editBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        editCoordinator.begin(action: .dontUnderstand, noteContext: editTextView.string, noteID: UUID())
+        editCoordinator.editProposal(text: "Edited adaptive beta.")
+        XCTAssertEqual(editCoordinator.proposal?.adaptiveExplanationContext, context)
+    }
+
+    func testAdaptiveProposalPreviewDisplaysMetadata() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Neural Network Layers"],
+            strongConcepts: ["Derivatives"],
+            missingPrerequisites: ["Chain Rule"],
+            retrievedNoteSources: [AdaptiveExplanationSource(noteTitle: "Machine Learning Lecture", snippet: "Backpropagation uses gradients.")],
+            inferredLearnerLevel: "Needs prerequisite support",
+            confidence: 0.74
+        )
+
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: context)
+
+        XCTAssertTrue(lines.contains("Missing prerequisite:\nChain Rule"))
+        XCTAssertTrue(lines.contains("Weak concept:\nNeural Network Layers"))
+        XCTAssertTrue(lines.contains("Known concept:\nDerivatives"))
+        XCTAssertTrue(lines.contains("Sources:\nMachine Learning Lecture"))
+        XCTAssertTrue(lines.contains("Learner level:\nNeeds prerequisite support"))
+        XCTAssertTrue(lines.contains("Confidence:\nHigh"))
+    }
+
+    func testDontUnderstandProposalUsesFallbackWhenAdaptiveDataUnavailable() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Fallback explanation.")
+        )
+
+        coordinator.begin(action: .dontUnderstand, noteContext: textView.string, noteID: UUID())
+
+        XCTAssertEqual(coordinator.proposal?.adaptiveExplanationContext, .unavailable())
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: .unavailable())
+        XCTAssertTrue(lines.contains("Learner level:\nUnknown"))
+        XCTAssertTrue(lines.contains("Adaptive data unavailable"))
+    }
+
+    func testDontUnderstandPromptContainsSourceBackedSectionsAndExcerpts() {
+        let context = makeSourceBackedAdaptiveContext()
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation applies the chain rule.",
+            noteContext: "Neural network lecture notes.",
+            adaptiveContext: context
+        )
+
+        XCTAssertTrue(prompt.contains("STUDENT CONTEXT"))
+        XCTAssertTrue(prompt.contains("Missing prerequisites: Chain Rule"))
+        XCTAssertTrue(prompt.contains("Weak concepts: Partial Derivatives"))
+        XCTAssertTrue(prompt.contains("Learner level: Needs prerequisite support"))
+        XCTAssertTrue(prompt.contains("SOURCE MATERIAL"))
+        XCTAssertTrue(prompt.contains("Source: Lecture 4 — Backpropagation — Gradients"))
+        XCTAssertTrue(prompt.contains("the chain rule allows gradients to propagate backward through layers"))
+        XCTAssertTrue(prompt.contains("GROUNDING RULES"))
+        XCTAssertTrue(prompt.contains("Do not cite sources that were not supplied"))
+        XCTAssertTrue(prompt.contains("If the supplied material is insufficient"))
+    }
+
+    func testDontUnderstandProposalIncludesRetrievedSourceContent() {
+        let context = makeSourceBackedAdaptiveContext()
+        let (bridge, textView) = makeProposalBridge(text: "Backpropagation uses chain rule.", selection: NSRange(location: 0, length: 15))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Source-backed explanation.", adaptiveExplanationContext: context)
+        )
+
+        coordinator.begin(action: .dontUnderstand, noteContext: textView.string, noteID: UUID())
+
+        let source = coordinator.proposal?.adaptiveExplanationContext?.retrievedNoteSources.first
+        XCTAssertEqual(source?.noteTitle, "Lecture 4 — Backpropagation")
+        XCTAssertEqual(source?.sectionTitle, "Gradients")
+        XCTAssertEqual(source?.sourceType, "chunk")
+        XCTAssertTrue(source?.groundingText.contains("chain rule allows gradients") == true)
+    }
+
+    func testSourceMetadataSurvivesAcceptRejectAndEditAccept() {
+        let context = makeSourceBackedAdaptiveContext()
+        let selection = NSRange(location: 6, length: 4)
+
+        let (acceptBridge, acceptTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let acceptCoordinator = AIProposalCoordinator(
+            bridge: acceptBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        let acceptNoteID = UUID()
+        acceptCoordinator.begin(action: .dontUnderstand, noteContext: acceptTextView.string, noteID: acceptNoteID)
+        let accepted = acceptCoordinator.acceptProposal(selectedNoteID: acceptNoteID)
+        XCTAssertEqual(accepted?.adaptiveExplanationContext?.retrievedNoteSources.first?.sourceID, "chunk-backprop-4")
+
+        let (rejectBridge, rejectTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let rejectCoordinator = AIProposalCoordinator(
+            bridge: rejectBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        rejectCoordinator.begin(action: .dontUnderstand, noteContext: rejectTextView.string, noteID: UUID())
+        let rejected = rejectCoordinator.rejectProposal()
+        XCTAssertEqual(rejected?.adaptiveExplanationContext?.retrievedNoteSources.first?.sourceID, "chunk-backprop-4")
+        XCTAssertEqual(rejectTextView.string, "Alpha beta gamma")
+
+        let (editBridge, editTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let editCoordinator = AIProposalCoordinator(
+            bridge: editBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        let editNoteID = UUID()
+        editCoordinator.begin(action: .dontUnderstand, noteContext: editTextView.string, noteID: editNoteID)
+        editCoordinator.editProposal(text: "Edited adaptive beta.")
+        let editedAccepted = editCoordinator.acceptProposal(selectedNoteID: editNoteID)
+        XCTAssertEqual(editedAccepted?.adaptiveExplanationContext?.retrievedNoteSources.first?.sourceID, "chunk-backprop-4")
+        XCTAssertTrue(editTextView.string.contains("Edited adaptive beta."))
+    }
+
+    func testNoSourceFallbackDoesNotFabricateSourceInformation() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Limits"],
+            missingPrerequisites: ["Continuity"],
+            inferredLearnerLevel: "Developing understanding",
+            confidence: 0.42
+        )
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "A derivative is a limit.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+
+        XCTAssertTrue(prompt.contains("Source grounding unavailable"))
+        XCTAssertFalse(prompt.contains("Source:"))
+        XCTAssertFalse(prompt.contains("Lecture 4"))
+    }
+
+    func testMissingAdaptiveContextDoesNotCrashSourceBackedPrompt() {
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "A derivative is a limit.",
+            noteContext: "",
+            adaptiveContext: nil
+        )
+
+        XCTAssertTrue(prompt.contains("Learner level: Unknown"))
+        XCTAssertTrue(prompt.contains("Source grounding unavailable"))
+        XCTAssertTrue(prompt.contains("A derivative is a limit."))
+    }
+
+    func testAdaptivePreviewDisplaysSourceTitlesMissingPrerequisiteAndLearnerLevel() {
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: makeSourceBackedAdaptiveContext())
+
+        XCTAssertTrue(lines.contains("Sources:\nLecture 4 — Backpropagation — Gradients"))
+        XCTAssertTrue(lines.contains("Missing prerequisite:\nChain Rule"))
+        XCTAssertTrue(lines.contains("Learner level:\nNeeds prerequisite support"))
+    }
+
+    func testStaleCompletionCannotInstallSourceBackedProposal() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = DeferredAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let staleRequestID = coordinator.begin(action: .dontUnderstand, noteContext: textView.string, noteID: noteID)
+        coordinator.invalidateActiveRequest()
+        if let staleRequestID {
+            generator.complete(
+                requestID: staleRequestID,
+                response: "Late source-backed response.",
+                adaptiveExplanationContext: makeSourceBackedAdaptiveContext()
+            )
+        }
+
+        XCTAssertNil(coordinator.proposal)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testSourceBackedProposalCannotCrossNoteBoundaries() {
+        let noteA = UUID()
+        let noteB = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Source-backed beta.", adaptiveExplanationContext: makeSourceBackedAdaptiveContext())
+        )
+
+        coordinator.begin(action: .dontUnderstand, noteContext: textView.string, noteID: noteA)
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteB)
+
+        XCTAssertNil(accepted)
+        XCTAssertEqual(coordinator.proposal?.state, .invalidated)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testConceptProfileAggregatesHelpfulSignalsCorrectly() {
+        let signals = [
+            makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+            makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+            makeLearningSignal(conceptIDs: ["chain-rule"], type: .accepted)
+        ]
+
+        let profile = ConceptLearningProfileBuilder().profile(for: "chain-rule", signals: signals)
+
+        XCTAssertEqual(profile.helpfulCount, 2)
+        XCTAssertEqual(profile.acceptCount, 1)
+        XCTAssertEqual(profile.helpfulRatio, 1)
+        XCTAssertNotNil(profile.lastInteractionDate)
+    }
+
+    func testConceptProfileAggregatesConfusedSignalsCorrectly() {
+        let signals = [
+            makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedStillConfused),
+            makeLearningSignal(conceptIDs: ["chain-rule"], type: .requestedAgain),
+            makeLearningSignal(conceptIDs: ["chain-rule"], type: .heavilyEdited)
+        ]
+
+        let profile = ConceptLearningProfileBuilder().profile(for: "chain-rule", signals: signals)
+
+        XCTAssertEqual(profile.confusedCount, 1)
+        XCTAssertEqual(profile.requestedAgainCount, 1)
+        XCTAssertEqual(profile.heavilyEditedCount, 1)
+        XCTAssertEqual(profile.confusionRatio, 1)
+    }
+
+    func testProfileBuilderHandlesEmptySignalsAndMultipleConcepts() {
+        let builder = ConceptLearningProfileBuilder()
+        let empty = builder.profile(for: "chain-rule", signals: [])
+        XCTAssertEqual(empty.conceptID, "chain-rule")
+        XCTAssertEqual(empty.helpfulCount, 0)
+
+        let profiles = builder.profiles(
+            for: ["chain-rule", "partial-derivatives"],
+            signals: [
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .markedStillConfused)
+            ]
+        )
+
+        XCTAssertEqual(profiles["chain-rule"]?.helpfulCount, 1)
+        XCTAssertEqual(profiles["partial-derivatives"]?.confusedCount, 1)
+    }
+
+    func testAdaptiveContextIncludesHistoricallyHelpfulAndConfusingConcepts() {
+        var context = makeSourceBackedAdaptiveContext()
+        let profiles = ConceptLearningProfileBuilder().profiles(
+            for: context.conceptIDs,
+            signals: [
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .markedStillConfused)
+            ]
+        )
+
+        context.applyLearningProfiles(
+            Array(profiles.values),
+            conceptNameByID: [
+                "chain-rule": "Chain Rule",
+                "partial-derivatives": "Partial Derivatives"
+            ]
+        )
+
+        XCTAssertEqual(context.historicallyHelpfulConcepts, ["Chain Rule"])
+        XCTAssertEqual(context.historicallyConfusingConcepts, ["Partial Derivatives"])
+        XCTAssertEqual(context.priorHelpfulExplanationsCount, 1)
+        XCTAssertEqual(context.priorConfusingExplanationsCount, 1)
+    }
+
+    func testRequestedAgainElevatesHistoricallyConfusingConcept() {
+        var context = AdaptiveExplanationContext(conceptIDs: ["chain-rule"])
+        let profiles = ConceptLearningProfileBuilder().profiles(
+            for: context.conceptIDs,
+            signals: [
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .requestedAgain),
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .requestedAgain)
+            ]
+        )
+
+        context.applyLearningProfiles(Array(profiles.values), conceptNameByID: ["chain-rule": "Chain Rule"])
+
+        XCTAssertEqual(context.historicallyConfusingConcepts, ["Chain Rule"])
+        XCTAssertEqual(context.priorConfusingExplanationsCount, 2)
+    }
+
+    func testDontUnderstandPromptContainsLearningHistorySection() {
+        var context = makeSourceBackedAdaptiveContext()
+        context.historicallyHelpfulConcepts = ["Chain Rule"]
+        context.historicallyConfusingConcepts = ["Partial Derivatives"]
+        context.priorHelpfulExplanationsCount = 2
+        context.priorConfusingExplanationsCount = 1
+
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation uses the chain rule.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+
+        XCTAssertTrue(prompt.contains("LEARNING HISTORY"))
+        XCTAssertTrue(prompt.contains("Historically Helpful Concepts: Chain Rule"))
+        XCTAssertTrue(prompt.contains("Historically Confusing Concepts: Partial Derivatives"))
+        XCTAssertTrue(prompt.contains("Prior helpful explanations: 2"))
+        XCTAssertTrue(prompt.contains("Prior confusing explanations: 1"))
+    }
+
+    func testLearningHistoryPromptRulesAdaptHelpfulAndConfusingConcepts() {
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation uses the chain rule.",
+            noteContext: "",
+            adaptiveContext: makeSourceBackedAdaptiveContext()
+        )
+
+        XCTAssertTrue(prompt.contains("If a concept appears historically confusing"))
+        XCTAssertTrue(prompt.contains("reduce complexity"))
+        XCTAssertTrue(prompt.contains("use more examples"))
+        XCTAssertTrue(prompt.contains("If a concept appears historically helpful"))
+        XCTAssertTrue(prompt.contains("slightly more advanced explanation"))
+    }
+
+    func testPreviewDisplaysLearningHistoryAndFallback() {
+        var context = makeSourceBackedAdaptiveContext()
+        context.historicallyHelpfulConcepts = ["Chain Rule"]
+        context.historicallyConfusingConcepts = ["Partial Derivatives"]
+
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: context)
+        XCTAssertTrue(lines.contains("Learning history:\nPreviously helpful: Chain Rule\nPreviously confusing: Partial Derivatives"))
+
+        let fallbackLines = AIProposalPreviewView.adaptedUsingLines(from: makeSourceBackedAdaptiveContext())
+        XCTAssertTrue(fallbackLines.contains("Learning history:\nLearning history unavailable"))
+    }
+
+    func testHelpfulFeedbackAffectsFutureContext() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let proposal = makeLearningSignalProposal()
+        _ = recorder.recordHelpful(proposal: proposal)
+
+        var context = AdaptiveExplanationContext(conceptIDs: ["concept-a"])
+        let profiles = ConceptLearningProfileBuilder().profiles(for: context.conceptIDs, signals: store.allSignals())
+        context.applyLearningProfiles(Array(profiles.values), conceptNameByID: ["concept-a": "Weak Concept"])
+
+        XCTAssertEqual(context.historicallyHelpfulConcepts, ["Weak Concept"])
+        XCTAssertEqual(context.historicallyConfusingConcepts, [])
+    }
+
+    func testStillConfusedFeedbackAffectsFutureContext() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let proposal = makeLearningSignalProposal()
+        _ = recorder.recordStillConfused(proposal: proposal)
+
+        var context = AdaptiveExplanationContext(conceptIDs: ["concept-a"])
+        let profiles = ConceptLearningProfileBuilder().profiles(for: context.conceptIDs, signals: store.allSignals())
+        context.applyLearningProfiles(Array(profiles.values), conceptNameByID: ["concept-a": "Weak Concept"])
+
+        XCTAssertEqual(context.historicallyHelpfulConcepts, [])
+        XCTAssertEqual(context.historicallyConfusingConcepts, ["Weak Concept"])
+    }
+
+    func testMissingLearningHistoryDoesNotCrash() {
+        var context = AdaptiveExplanationContext(conceptIDs: [])
+        let profiles = ConceptLearningProfileBuilder().profiles(for: context.conceptIDs, signals: [])
+        context.applyLearningProfiles(Array(profiles.values))
+
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "A derivative is a limit.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+
+        XCTAssertTrue(prompt.contains("Learning history unavailable"))
+        XCTAssertTrue(context.historicallyHelpfulConcepts.isEmpty)
+        XCTAssertTrue(context.historicallyConfusingConcepts.isEmpty)
+    }
+
+    func testMasteryBuilderProducesMasteredState() {
+        let profile = ConceptLearningProfile(
+            conceptID: "chain-rule",
+            helpfulCount: 3,
+            acceptCount: 2,
+            lightlyEditedCount: 1
+        )
+
+        let mastery = ConceptMasteryBuilder().mastery(for: profile)
+
+        XCTAssertEqual(mastery.masteryState, .mastered)
+        XCTAssertGreaterThanOrEqual(mastery.masteryScore, 0.8)
+    }
+
+    func testMasteryBuilderProducesFamiliarState() {
+        let profile = ConceptLearningProfile(
+            conceptID: "chain-rule",
+            helpfulCount: 1,
+            acceptCount: 1
+        )
+
+        let mastery = ConceptMasteryBuilder().mastery(for: profile)
+
+        XCTAssertEqual(mastery.masteryState, .familiar)
+        XCTAssertGreaterThanOrEqual(mastery.masteryScore, 0.6)
+        XCTAssertLessThan(mastery.masteryScore, 0.8)
+    }
+
+    func testMasteryBuilderProducesNeedsPracticeState() {
+        let mastery = ConceptMasteryBuilder().mastery(for: ConceptLearningProfile(conceptID: "chain-rule"))
+
+        XCTAssertEqual(mastery.masteryState, .needsPractice)
+        XCTAssertEqual(mastery.masteryScore, 0.5)
+    }
+
+    func testMasteryBuilderProducesStrugglingState() {
+        let profile = ConceptLearningProfile(
+            conceptID: "chain-rule",
+            confusedCount: 2,
+            rejectCount: 1,
+            heavilyEditedCount: 1,
+            requestedAgainCount: 1
+        )
+
+        let mastery = ConceptMasteryBuilder().mastery(for: profile)
+
+        XCTAssertEqual(mastery.masteryState, .struggling)
+        XCTAssertLessThan(mastery.masteryScore, 0.4)
+    }
+
+    func testHelpfulSignalsIncreaseMastery() {
+        let baseline = ConceptMasteryBuilder().mastery(for: ConceptLearningProfile(conceptID: "chain-rule"))
+        let helpful = ConceptMasteryBuilder().mastery(
+            for: ConceptLearningProfile(conceptID: "chain-rule", helpfulCount: 1)
+        )
+
+        XCTAssertGreaterThan(helpful.masteryScore, baseline.masteryScore)
+    }
+
+    func testConfusedSignalsDecreaseMastery() {
+        let baseline = ConceptMasteryBuilder().mastery(for: ConceptLearningProfile(conceptID: "chain-rule"))
+        let confused = ConceptMasteryBuilder().mastery(
+            for: ConceptLearningProfile(conceptID: "chain-rule", confusedCount: 1)
+        )
+
+        XCTAssertLessThan(confused.masteryScore, baseline.masteryScore)
+    }
+
+    func testRequestedAgainPenalizesMastery() {
+        let baseline = ConceptMasteryBuilder().mastery(for: ConceptLearningProfile(conceptID: "chain-rule"))
+        let requestedAgain = ConceptMasteryBuilder().mastery(
+            for: ConceptLearningProfile(conceptID: "chain-rule", requestedAgainCount: 2)
+        )
+
+        XCTAssertLessThan(requestedAgain.masteryScore, baseline.masteryScore)
+    }
+
+    func testAdaptiveContextIncludesMasteryStates() {
+        var context = makeSourceBackedAdaptiveContext()
+        let profiles = ConceptLearningProfileBuilder().profiles(
+            for: context.conceptIDs,
+            signals: [
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .markedHelpful),
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .accepted),
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .accepted),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .markedStillConfused),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .markedStillConfused),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .rejected),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .heavilyEdited),
+                makeLearningSignal(conceptIDs: ["partial-derivatives"], type: .requestedAgain)
+            ]
+        )
+
+        context.applyLearningProfiles(
+            Array(profiles.values),
+            conceptNameByID: [
+                "chain-rule": "Chain Rule",
+                "partial-derivatives": "Partial Derivatives"
+            ]
+        )
+
+        XCTAssertEqual(context.masteryStates["Chain Rule"], .mastered)
+        XCTAssertEqual(context.masteryStates["Partial Derivatives"], .struggling)
+    }
+
+    func testDontUnderstandPromptContainsMasterySection() {
+        var context = makeSourceBackedAdaptiveContext()
+        context.masteryStates = [
+            "Chain Rule": .mastered,
+            "Partial Derivatives": .struggling
+        ]
+
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation uses the chain rule.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+
+        XCTAssertTrue(prompt.contains("MASTERY STATE"))
+        XCTAssertTrue(prompt.contains("Concept: Chain Rule"))
+        XCTAssertTrue(prompt.contains("State: Mastered"))
+        XCTAssertTrue(prompt.contains("Concept: Partial Derivatives"))
+        XCTAssertTrue(prompt.contains("State: Struggling"))
+        XCTAssertTrue(prompt.contains("If mastery state is struggling"))
+        XCTAssertTrue(prompt.contains("If mastery state is needsPractice"))
+        XCTAssertTrue(prompt.contains("If mastery state is familiar"))
+        XCTAssertTrue(prompt.contains("If mastery state is mastered"))
+    }
+
+    func testAdaptivePreviewDisplaysMasteryStates() {
+        var context = makeSourceBackedAdaptiveContext()
+        context.masteryStates = [
+            "Chain Rule": .mastered,
+            "Partial Derivatives": .struggling
+        ]
+
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: context)
+
+        XCTAssertTrue(lines.contains("Mastery:\nChain Rule — Mastered\nPartial Derivatives — Struggling"))
+    }
+
+    func testMissingMasteryUsesFallback() {
+        let context = AdaptiveExplanationContext()
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "A derivative is a limit.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: context)
+
+        XCTAssertTrue(prompt.contains("Mastery unavailable"))
+        XCTAssertTrue(lines.contains("Mastery:\nMastery unavailable"))
+    }
+
+    func testMasteryRemainsDeterministicForSameSignals() {
+        let timestamp = Date(timeIntervalSince1970: 42)
+        let profile = ConceptLearningProfile(
+            conceptID: "chain-rule",
+            helpfulCount: 2,
+            confusedCount: 1,
+            acceptCount: 1,
+            rejectCount: 1,
+            lightlyEditedCount: 1,
+            heavilyEditedCount: 1,
+            requestedAgainCount: 1,
+            lastInteractionDate: timestamp
+        )
+        let builder = ConceptMasteryBuilder()
+
+        let first = builder.mastery(for: profile)
+        let second = builder.mastery(for: profile)
+
+        XCTAssertEqual(first, second)
+    }
+
+    func testKnowledgeGapsAppearInAdaptiveContext() {
+        let context = makeSourceBackedAdaptiveContext()
+
+        XCTAssertEqual(context.identifiedKnowledgeGaps, ["Chain Rule", "Partial Derivatives"])
+    }
+
+    func testKnowledgeGapsPrioritizePrerequisitesOverWeakConcepts() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Partial Derivatives", "Gradient Flow"],
+            missingPrerequisites: ["Chain Rule"]
+        )
+
+        XCTAssertEqual(context.identifiedKnowledgeGaps, ["Chain Rule", "Partial Derivatives", "Gradient Flow"])
+    }
+
+    func testHistoricallyConfusingConceptBecomesKnowledgeGap() {
+        var context = AdaptiveExplanationContext(
+            conceptIDs: ["gradient-flow"],
+            weakConcepts: [],
+            missingPrerequisites: []
+        )
+        let profiles = ConceptLearningProfileBuilder().profiles(
+            for: context.conceptIDs,
+            signals: [makeLearningSignal(conceptIDs: ["gradient-flow"], type: .markedStillConfused)]
+        )
+
+        context.applyLearningProfiles(Array(profiles.values), conceptNameByID: ["gradient-flow": "Gradient Flow"])
+
+        XCTAssertEqual(context.historicallyConfusingConcepts, ["Gradient Flow"])
+        XCTAssertEqual(context.identifiedKnowledgeGaps, ["Gradient Flow"])
+    }
+
+    func testDontUnderstandPromptContainsKnowledgeGapSection() {
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation uses the chain rule.",
+            noteContext: "",
+            adaptiveContext: makeSourceBackedAdaptiveContext()
+        )
+
+        XCTAssertTrue(prompt.contains("KNOWLEDGE GAPS"))
+        XCTAssertTrue(prompt.contains("Likely missing concepts:"))
+        XCTAssertTrue(prompt.contains("- Chain Rule"))
+        XCTAssertTrue(prompt.contains("Explicitly address identified knowledge gaps"))
+        XCTAssertTrue(prompt.contains("Build the explanation from prerequisite upward"))
+    }
+
+    func testAdaptivePreviewDisplaysKnowledgeGaps() {
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: makeSourceBackedAdaptiveContext())
+
+        XCTAssertTrue(lines.contains("Knowledge gaps:\nChain Rule\nPartial Derivatives"))
+    }
+
+    func testGapDeduplicationPreventsRepeatedConcepts() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Chain Rule", "Partial Derivatives"],
+            missingPrerequisites: ["Chain Rule"],
+            historicallyConfusingConcepts: ["Partial Derivatives", "Gradient Flow"]
+        )
+
+        XCTAssertEqual(context.identifiedKnowledgeGaps, ["Chain Rule", "Partial Derivatives", "Gradient Flow"])
+    }
+
+    func testMissingGapDataUsesFallbackText() {
+        let context = AdaptiveExplanationContext()
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "A derivative is a limit.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+        let lines = AIProposalPreviewView.adaptedUsingLines(from: context)
+
+        XCTAssertTrue(prompt.contains("Knowledge gaps unavailable"))
+        XCTAssertTrue(lines.contains("Knowledge gaps:\nKnowledge gaps unavailable"))
+    }
+
+    func testKnowledgeGapContextSurvivesAcceptRejectAndEditAccept() {
+        let context = makeSourceBackedAdaptiveContext()
+        let selection = NSRange(location: 6, length: 4)
+
+        let (acceptBridge, acceptTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let acceptCoordinator = AIProposalCoordinator(
+            bridge: acceptBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        let acceptNoteID = UUID()
+        acceptCoordinator.begin(action: .dontUnderstand, noteContext: acceptTextView.string, noteID: acceptNoteID)
+        let accepted = acceptCoordinator.acceptProposal(selectedNoteID: acceptNoteID)
+        XCTAssertEqual(accepted?.adaptiveExplanationContext?.identifiedKnowledgeGaps, ["Chain Rule", "Partial Derivatives"])
+
+        let (rejectBridge, rejectTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let rejectCoordinator = AIProposalCoordinator(
+            bridge: rejectBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        rejectCoordinator.begin(action: .dontUnderstand, noteContext: rejectTextView.string, noteID: UUID())
+        let rejected = rejectCoordinator.rejectProposal()
+        XCTAssertEqual(rejected?.adaptiveExplanationContext?.identifiedKnowledgeGaps, ["Chain Rule", "Partial Derivatives"])
+        XCTAssertEqual(rejectTextView.string, "Alpha beta gamma")
+
+        let (editBridge, editTextView) = makeProposalBridge(text: "Alpha beta gamma", selection: selection)
+        let editCoordinator = AIProposalCoordinator(
+            bridge: editBridge,
+            generator: MockAIProposalGenerator(response: "Adaptive beta.", adaptiveExplanationContext: context)
+        )
+        let editNoteID = UUID()
+        editCoordinator.begin(action: .dontUnderstand, noteContext: editTextView.string, noteID: editNoteID)
+        editCoordinator.editProposal(text: "Edited adaptive beta.")
+        let editedAccepted = editCoordinator.acceptProposal(selectedNoteID: editNoteID)
+        XCTAssertEqual(editedAccepted?.adaptiveExplanationContext?.identifiedKnowledgeGaps, ["Chain Rule", "Partial Derivatives"])
+        XCTAssertTrue(editTextView.string.contains("Edited adaptive beta."))
+    }
+
+    func testSourceBackedExplanationStillIncludesKnowledgeGaps() {
+        let context = makeSourceBackedAdaptiveContext()
+        let prompt = AIActionPromptBuilder().prompt(
+            action: .dontUnderstand,
+            selectedText: "Backpropagation uses the chain rule.",
+            noteContext: "",
+            adaptiveContext: context
+        )
+
+        XCTAssertTrue(prompt.contains("SOURCE MATERIAL"))
+        XCTAssertTrue(prompt.contains("the chain rule allows gradients to propagate backward through layers"))
+        XCTAssertTrue(prompt.contains("KNOWLEDGE GAPS"))
+        XCTAssertTrue(prompt.contains("- Chain Rule"))
+    }
+
+    func testLearningHistoryCanPromoteGapWhenRequestedAgain() {
+        var context = AdaptiveExplanationContext(conceptIDs: ["chain-rule"])
+        let profiles = ConceptLearningProfileBuilder().profiles(
+            for: context.conceptIDs,
+            signals: [
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .requestedAgain),
+                makeLearningSignal(conceptIDs: ["chain-rule"], type: .requestedAgain)
+            ]
+        )
+
+        context.applyLearningProfiles(Array(profiles.values), conceptNameByID: ["chain-rule": "Chain Rule"])
+
+        XCTAssertEqual(context.historicallyConfusingConcepts, ["Chain Rule"])
+        XCTAssertEqual(context.identifiedKnowledgeGaps, ["Chain Rule"])
+    }
+
+    func testLateProposalCompletionIgnoredAfterNoteSwitch() {
+        let noteA = UUID()
+        let noteB = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = DeferredAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let requestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteA)
+        coordinator.noteDidChange(to: noteB)
+        if let requestID {
+            generator.complete(requestID: requestID, response: "Late expansion.")
+        }
+
+        XCTAssertNil(coordinator.proposal)
+        XCTAssertNil(coordinator.activeRequestID)
+        XCTAssertFalse(coordinator.isGenerating)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testLateProposalCompletionIgnoredAfterNewRequest() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = DeferredAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let staleRequestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        coordinator.invalidateActiveRequest()
+        let currentRequestID = coordinator.begin(action: .explain, noteContext: textView.string, noteID: noteID)
+
+        if let staleRequestID {
+            generator.complete(requestID: staleRequestID, response: "Stale expansion.")
+        }
+        XCTAssertNil(coordinator.proposal)
+
+        if let currentRequestID {
+            generator.complete(requestID: currentRequestID, response: "Current explanation.")
+        }
+
+        XCTAssertEqual(coordinator.proposal?.action, .explain)
+        XCTAssertEqual(coordinator.proposal?.generatedText, "Current explanation.")
+        XCTAssertEqual(coordinator.proposal?.originatingRequestID, currentRequestID)
+    }
+
+    func testPendingProposalBlocksNewGeneration() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = MockAIProposalGenerator(response: "First response.")
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let firstRequestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        let secondRequestID = coordinator.begin(action: .explain, noteContext: textView.string, noteID: noteID)
+
+        XCTAssertNotNil(firstRequestID)
+        XCTAssertNil(secondRequestID)
+        XCTAssertEqual(coordinator.proposal?.action, .expand)
+        XCTAssertEqual(generator.action, .expand)
+    }
+
+    func testRejectInvalidatesOutstandingRequest() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated response.")
+        )
+
+        coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        XCTAssertNotNil(coordinator.activeRequestID)
+
+        let rejected = coordinator.rejectProposal()
+
+        XCTAssertEqual(rejected?.status, .rejected)
+        XCTAssertNil(coordinator.proposal)
+        XCTAssertNil(coordinator.activeRequestID)
+        XCTAssertNil(coordinator.activeNoteID)
+    }
+
+    func testProposalClearedOnNoteChange() {
+        let noteA = UUID()
+        let noteB = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated response.")
+        )
+
+        coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteA)
+        XCTAssertNotNil(coordinator.proposal)
+
+        coordinator.noteDidChange(to: noteB)
+
+        XCTAssertNil(coordinator.proposal)
+        XCTAssertNil(coordinator.activeRequestID)
+        XCTAssertNil(coordinator.activeNoteID)
+    }
+
+    func testAcceptFailsAcrossNoteBoundary() {
+        let noteA = UUID()
+        let noteB = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated response.")
+        )
+
+        coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteA)
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteB)
+
+        XCTAssertNil(accepted)
+        XCTAssertEqual(coordinator.proposal?.state, .invalidated)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testDuplicateFeedbackSignalsNotRecorded() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let proposal = makeLearningSignalProposal()
+
+        _ = recorder.recordHelpful(proposal: proposal)
+        _ = recorder.recordHelpful(proposal: proposal)
+        _ = recorder.recordStillConfused(proposal: proposal)
+        _ = recorder.recordStillConfused(proposal: proposal)
+
+        XCTAssertEqual(store.signals(for: proposal.id).map(\.signalType), [.markedHelpful, .markedStillConfused])
+    }
+
+    func testOnlyCurrentRequestMayInstallProposal() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = DeferredAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let staleRequestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        coordinator.invalidateActiveRequest()
+        let currentRequestID = coordinator.begin(action: .analogy, noteContext: textView.string, noteID: noteID)
+
+        if let staleRequestID {
+            generator.complete(requestID: staleRequestID, response: "Stale response.")
+        }
+        if let currentRequestID {
+            generator.complete(requestID: currentRequestID, response: "Current analogy.")
+        }
+
+        XCTAssertEqual(coordinator.proposal?.action, .analogy)
+        XCTAssertEqual(coordinator.proposal?.generatedText, "Current analogy.")
+        XCTAssertEqual(coordinator.proposal?.originatingRequestID, currentRequestID)
+    }
+
+    func testProposalBecomesStaleAfterDocumentChange() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated beta.")
+        )
+        let originalSnapshot = DocumentSnapshot(noteID: noteID, content: textView.string)
+
+        coordinator.begin(
+            action: .expand,
+            selection: (text: "beta", range: NSRange(location: 6, length: 4)),
+            noteContext: textView.string,
+            noteID: noteID,
+            documentSnapshot: originalSnapshot
+        )
+        textView.string = "Alpha beta changed"
+        let currentSnapshot = DocumentSnapshot(noteID: noteID, content: textView.string)
+
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteID, currentSnapshot: currentSnapshot)
+
+        XCTAssertNil(accepted)
+        XCTAssertEqual(coordinator.proposal?.state, .stale)
+        XCTAssertFalse(textView.string.contains("Generated beta."))
+    }
+
+    func testAcceptRefusesStaleProposal() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated beta.")
+        )
+        let originalSnapshot = DocumentSnapshot(noteID: noteID, content: textView.string)
+
+        coordinator.begin(
+            action: .expand,
+            selection: (text: "beta", range: NSRange(location: 6, length: 4)),
+            noteContext: textView.string,
+            noteID: noteID,
+            documentSnapshot: originalSnapshot
+        )
+
+        let accepted = coordinator.acceptProposal(
+            selectedNoteID: noteID,
+            currentSnapshot: DocumentSnapshot(noteID: noteID, content: "Alpha beta gamma plus edit")
+        )
+
+        XCTAssertNil(accepted)
+        XCTAssertEqual(coordinator.proposal?.state, .stale)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testProposalStoresDocumentSnapshot() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let snapshot = DocumentSnapshot(noteID: noteID, content: textView.string)
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated beta.")
+        )
+
+        coordinator.begin(
+            action: .expand,
+            selection: (text: "beta", range: NSRange(location: 6, length: 4)),
+            noteContext: textView.string,
+            noteID: noteID,
+            documentSnapshot: snapshot
+        )
+
+        XCTAssertEqual(coordinator.proposal?.documentSnapshot, snapshot)
+        XCTAssertEqual(coordinator.proposal?.state, .ready)
+    }
+
+    func testCoordinatorRejectsCrossNoteAccept() {
+        let noteA = UUID()
+        let noteB = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let coordinator = AIProposalCoordinator(
+            bridge: bridge,
+            generator: MockAIProposalGenerator(response: "Generated beta.")
+        )
+
+        coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteA)
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteB)
+
+        XCTAssertNil(accepted)
+        XCTAssertEqual(coordinator.proposal?.state, .invalidated)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testRejectCancelsOutstandingGeneration() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = CancellableAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let requestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        let rejected = coordinator.rejectProposal()
+
+        XCTAssertNil(rejected)
+        XCTAssertEqual(requestID.map(generator.isCancelled), true)
+        XCTAssertEqual(coordinator.state, .invalidated)
+    }
+
+    func testNoteSwitchCancelsOutstandingGeneration() {
+        let noteA = UUID()
+        let noteB = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = CancellableAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let requestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteA)
+        coordinator.noteDidChange(to: noteB)
+
+        XCTAssertEqual(requestID.map(generator.isCancelled), true)
+        XCTAssertEqual(coordinator.state, .invalidated)
+        XCTAssertNil(coordinator.proposal)
+    }
+
+    func testNewGenerationCancelsPreviousGeneration() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = CancellableAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let firstRequestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        let secondRequestID = coordinator.begin(action: .explain, noteContext: textView.string, noteID: noteID)
+
+        XCTAssertNotNil(firstRequestID)
+        XCTAssertNotNil(secondRequestID)
+        XCTAssertNotEqual(firstRequestID, secondRequestID)
+        XCTAssertEqual(firstRequestID.map(generator.isCancelled), true)
+        XCTAssertEqual(coordinator.activeRequestID, secondRequestID)
+        XCTAssertEqual(coordinator.state, .generating)
+        coordinator.invalidateActiveRequest()
+    }
+
+    func testInvalidatedCompletionCannotBecomeReady() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = DeferredAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let requestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        coordinator.invalidateActiveRequest()
+        if let requestID {
+            generator.complete(requestID: requestID, response: "Late response.")
+        }
+
+        XCTAssertNil(coordinator.proposal)
+        XCTAssertEqual(coordinator.state, .invalidated)
+        XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testProposalStateTransitionsRemainValid() {
+        let noteID = UUID()
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: NSRange(location: 6, length: 4))
+        let generator = DeferredAIProposalGenerator()
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        let requestID = coordinator.begin(action: .expand, noteContext: textView.string, noteID: noteID)
+        XCTAssertEqual(coordinator.state, .generating)
+
+        if let requestID {
+            generator.complete(requestID: requestID, response: "Generated beta.")
+        }
+        XCTAssertEqual(coordinator.state, .ready)
+        XCTAssertEqual(coordinator.proposal?.state, .ready)
+
+        let accepted = coordinator.acceptProposal(selectedNoteID: noteID)
+        XCTAssertEqual(accepted?.state, .accepted)
+        XCTAssertEqual(coordinator.state, .accepted)
+    }
+
+    func testDocumentSnapshotUsesCurrentVersion() {
+        let noteID = UUID()
+        let first = DocumentSnapshot(noteID: noteID, content: "Alpha beta gamma")
+        let same = DocumentSnapshot(noteID: noteID, content: "Alpha beta gamma")
+        let changed = DocumentSnapshot(noteID: noteID, content: "Alpha beta changed")
+
+        XCTAssertEqual(first.contentHash, same.contentHash)
+        XCTAssertEqual(first.documentVersion, same.documentVersion)
+        XCTAssertTrue(first.matches(same))
+        XCTAssertNotEqual(first.contentHash, changed.contentHash)
+        XCTAssertFalse(first.matches(changed))
+    }
+
+    func testLearningSignalAcceptCreatesSignal() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let proposal = makeLearningSignalProposal(generatedText: "Generated explanation.")
+
+        let signal = recorder.recordAccepted(proposal: proposal, finalText: "Generated explanation.")
+
+        XCTAssertEqual(signal.signalType, .accepted)
+        XCTAssertEqual(signal.proposalID, proposal.id)
+        XCTAssertEqual(signal.sourceAction, .dontUnderstand)
+        XCTAssertEqual(signal.conceptIDs, ["concept-a"])
+        XCTAssertEqual(store.signals(for: proposal.id), [signal])
+    }
+
+    func testLearningSignalRejectCreatesSignal() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let proposal = makeLearningSignalProposal()
+
+        let signal = recorder.recordRejected(proposal: proposal)
+
+        XCTAssertEqual(signal.signalType, .rejected)
+        XCTAssertLessThan(signal.confidenceDelta, 0)
+        XCTAssertEqual(store.signals(for: proposal.id), [signal])
+    }
+
+    func testLearningSignalEditedAcceptCreatesCorrectSignalType() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let lightlyEditedProposal = makeLearningSignalProposal(generatedText: "Generated explanation.")
+        let heavilyEditedProposal = makeLearningSignalProposal(generatedText: "Generated explanation.")
+
+        let lightSignal = recorder.recordAccepted(
+            proposal: lightlyEditedProposal,
+            finalText: "Generated explanation!"
+        )
+        let heavySignal = recorder.recordAccepted(
+            proposal: heavilyEditedProposal,
+            finalText: "A completely different explanation with a new structure."
+        )
+
+        XCTAssertEqual(lightSignal.signalType, .lightlyEdited)
+        XCTAssertEqual(heavySignal.signalType, .heavilyEdited)
+    }
+
+    func testAdaptiveFeedbackCreatesHelpfulAndStillConfusedSignals() {
+        let store = makeLearningSignalStore()
+        let recorder = LearningSignalRecorder(store: store)
+        let proposal = makeLearningSignalProposal()
+
+        let helpful = recorder.recordHelpful(proposal: proposal)
+        let stillConfused = recorder.recordStillConfused(proposal: proposal)
+
+        XCTAssertEqual(helpful.signalType, .markedHelpful)
+        XCTAssertGreaterThan(helpful.confidenceDelta, 0)
+        XCTAssertEqual(stillConfused.signalType, .markedStillConfused)
+        XCTAssertLessThan(stillConfused.confidenceDelta, 0)
+        XCTAssertEqual(store.signals(for: proposal.id).map(\.signalType), [.markedHelpful, .markedStillConfused])
+    }
+
+    func testLearningSignalsPersistLocally() {
+        let suiteName = "notinq.learning.signals.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = LearningSignalStore(defaults: defaults, storageKey: "signals")
+        let proposal = makeLearningSignalProposal()
+        let signal = LearningSignal(
+            proposalID: proposal.id,
+            conceptIDs: ["concept-a"],
+            signalType: .accepted,
+            confidenceDelta: 0.05,
+            sourceAction: .dontUnderstand
+        )
+
+        store.append(signal)
+        let reloadedStore = LearningSignalStore(defaults: defaults, storageKey: "signals")
+
+        XCTAssertEqual(reloadedStore.allSignals(), [signal])
+    }
+
+    func testAdaptiveExplanationFeedbackOnlyAppearsForDontUnderstand() {
+        let adaptiveProposal = makeLearningSignalProposal(action: .dontUnderstand)
+        let explainProposal = makeLearningSignalProposal(action: .explain)
+
+        XCTAssertTrue(AdaptiveExplanationFeedbackView.isVisible(for: adaptiveProposal))
+        XCTAssertFalse(AdaptiveExplanationFeedbackView.isVisible(for: explainProposal))
+        XCTAssertFalse(AdaptiveExplanationFeedbackView.isVisible(for: nil))
+    }
+
+    private func makeLearningSignalStore() -> LearningSignalStore {
+        let suiteName = "notinq.learning.signals.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return LearningSignalStore(defaults: defaults, storageKey: "signals")
+    }
+
+    private func makeSourceBackedAdaptiveContext() -> AdaptiveExplanationContext {
+        AdaptiveExplanationContext(
+            conceptIDs: ["chain-rule", "partial-derivatives"],
+            weakConcepts: ["Partial Derivatives"],
+            strongConcepts: ["Derivatives"],
+            missingPrerequisites: ["Chain Rule"],
+            retrievedNoteSources: [
+                AdaptiveExplanationSource(
+                    sourceID: "chunk-backprop-4",
+                    sourceType: "chunk",
+                    noteID: UUID(uuidString: "11111111-1111-4111-8111-111111111111"),
+                    noteTitle: "Lecture 4 — Backpropagation",
+                    sectionTitle: "Gradients",
+                    snippet: "Chain rule through layers.",
+                    relevantExcerpt: "In backpropagation, the chain rule allows gradients to propagate backward through layers."
+                )
+            ],
+            inferredLearnerLevel: "Needs prerequisite support",
+            confidence: 0.72
+        )
+    }
+
+    private func makeLearningSignal(
+        conceptIDs: [String],
+        type: LearningSignalType,
+        timestamp: Date = Date()
+    ) -> LearningSignal {
+        LearningSignal(
+            proposalID: UUID(),
+            conceptIDs: conceptIDs,
+            timestamp: timestamp,
+            signalType: type,
+            confidenceDelta: 0,
+            sourceAction: .dontUnderstand
+        )
+    }
+
+    private func makeLearningSignalProposal(
+        action: AIEditorAction = .dontUnderstand,
+        generatedText: String = "Generated explanation."
+    ) -> AIProposal {
+        AIProposal(
+            action: action,
+            originalText: "Original concept",
+            generatedText: generatedText,
+            insertionRange: NSRange(location: 16, length: 0),
+            originalSelectionRange: NSRange(location: 0, length: 16),
+            adaptiveExplanationContext: AdaptiveExplanationContext(
+                conceptIDs: ["concept-a"],
+                weakConcepts: ["Weak Concept"],
+                strongConcepts: ["Known Concept"],
+                missingPrerequisites: ["Prerequisite"],
+                retrievedNoteSources: [AdaptiveExplanationSource(noteTitle: "Source Note")],
+                inferredLearnerLevel: "Needs prerequisite support",
+                confidence: 0.7
+            )
+        )
     }
 
     func testSemanticStudyColorsAdaptToAppearances() {
@@ -1672,6 +3160,156 @@ final class AIEvaluationRegressionTests: XCTestCase {
         scores.knowledgeSnapshot = AIEvaluationJSONScores(parsingSuccess: 1, schemaValidation: 1, completeness: 1, overall: overall)
         scores.overall = overall
         return scores
+    }
+
+    func testTeachMeSessionStateTransitions() {
+        let engine = TeachMeEngine()
+        let context = AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Chain Rule"])
+
+        let started = engine.startSession(adaptiveContext: context)
+        XCTAssertEqual(started.state, .question)
+        XCTAssertEqual(started.activeConceptName, "Chain Rule")
+
+        let answering = engine.beginAnswering(started)
+        XCTAssertEqual(answering.state, .answering)
+
+        let feedback = engine.submitAnswer("The chain rule connects nested functions to derivatives.", for: answering)
+        XCTAssertEqual(feedback.state, .feedback)
+        XCTAssertEqual(feedback.answerHistory.count, 1)
+    }
+
+    func testTeachMeQuestionGeneration() {
+        let engine = TeachMeEngine()
+        let source = AdaptiveExplanationSource(noteTitle: "Lecture 4", relevantExcerpt: "The chain rule supports backpropagation.")
+        let context = AdaptiveExplanationContext(
+            identifiedKnowledgeGaps: ["Chain Rule"],
+            retrievedNoteSources: [source]
+        )
+
+        let session = engine.startSession(adaptiveContext: context)
+
+        XCTAssertEqual(session.activeQuestion?.conceptID, "chain rule")
+        XCTAssertEqual(session.activeQuestion?.conceptName, "Chain Rule")
+        XCTAssertEqual(session.activeQuestion?.originatingKnowledgeGap, "Chain Rule")
+        XCTAssertEqual(session.activeQuestion?.sourceReferences.first?.noteTitle, "Lecture 4")
+        XCTAssertTrue(session.activeQuestion?.question.contains("Chain Rule") ?? false)
+    }
+
+    func testTeachMeCorrectPathCompletes() {
+        let engine = TeachMeEngine()
+        let session = engine.beginAnswering(
+            engine.startSession(adaptiveContext: AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Gradient Descent"]))
+        )
+
+        let feedback = engine.submitAnswer(
+            "Gradient descent adjusts parameters step by step to reduce loss in the model.",
+            for: session
+        )
+        let complete = engine.advanceAfterFeedback(feedback)
+
+        XCTAssertEqual(feedback.answerHistory.last?.evaluation, .correct)
+        XCTAssertEqual(complete.state, .complete)
+    }
+
+    func testTeachMeIncorrectPathProducesFollowUp() {
+        let engine = TeachMeEngine()
+        let session = engine.beginAnswering(
+            engine.startSession(adaptiveContext: AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Partial Derivatives"]))
+        )
+
+        let feedback = engine.submitAnswer("No idea", for: session)
+        let followUp = engine.advanceAfterFeedback(feedback)
+
+        XCTAssertEqual(feedback.answerHistory.last?.evaluation, .incorrect)
+        XCTAssertEqual(followUp.state, .question)
+        XCTAssertEqual(followUp.followUpCount, 1)
+        XCTAssertTrue(followUp.activeQuestion?.question.hasPrefix("Follow-up") ?? false)
+    }
+
+    func testTeachMePartiallyCorrectPathProducesFollowUp() {
+        let engine = TeachMeEngine()
+        let session = engine.beginAnswering(
+            engine.startSession(adaptiveContext: AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Backpropagation"]))
+        )
+
+        let feedback = engine.submitAnswer("It moves errors backward", for: session)
+        let followUp = engine.advanceAfterFeedback(feedback)
+
+        XCTAssertEqual(feedback.answerHistory.last?.evaluation, .partiallyCorrect)
+        XCTAssertEqual(followUp.state, .question)
+        XCTAssertEqual(followUp.followUpCount, 1)
+    }
+
+    func testTeachMeCompletionPathAfterFollowUp() {
+        let engine = TeachMeEngine()
+        let firstQuestion = engine.beginAnswering(
+            engine.startSession(adaptiveContext: AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Normalization"]))
+        )
+        let firstFeedback = engine.submitAnswer("Unsure", for: firstQuestion)
+        let followUpQuestion = engine.beginAnswering(engine.advanceAfterFeedback(firstFeedback))
+        let secondFeedback = engine.submitAnswer("Still unsure", for: followUpQuestion)
+        let complete = engine.advanceAfterFeedback(secondFeedback)
+
+        XCTAssertEqual(complete.state, .complete)
+        XCTAssertEqual(complete.answerHistory.count, 2)
+    }
+
+    func testTeachMeSessionPersistence() throws {
+        var studyData = NoteStudyData()
+        studyData.teachMeSession = TeachMeEngine().startSession(
+            adaptiveContext: AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Indexes"])
+        )
+
+        let encoded = try JSONEncoder().encode(studyData)
+        let decoded = try JSONDecoder().decode(NoteStudyData.self, from: encoded)
+
+        XCTAssertEqual(decoded.teachMeSession?.state, .question)
+        XCTAssertEqual(decoded.teachMeSession?.activeConceptName, "Indexes")
+    }
+
+    func testTeachMeLearningSignalRecording() {
+        let defaults = UserDefaults(suiteName: "TeachMeLearningSignalRecording-\(UUID().uuidString)")!
+        let store = LearningSignalStore(defaults: defaults, storageKey: "signals")
+        let recorder = LearningSignalRecorder(store: store)
+        let question = TeachMeQuestion(
+            conceptID: "chain rule",
+            conceptName: "Chain Rule",
+            question: "What is the key idea?"
+        )
+
+        recorder.recordTeachMeAttempt(question: question)
+        recorder.recordTeachMeEvaluation(question: question, evaluation: .correct)
+
+        let signals = store.allSignals()
+        XCTAssertEqual(signals.map(\.signalType), [.questionAttempted, .questionCorrect])
+        XCTAssertEqual(signals.flatMap(\.conceptIDs), ["chain rule", "chain rule"])
+    }
+
+    func testTeachMePrioritizesKnowledgeGap() {
+        let context = AdaptiveExplanationContext(
+            identifiedKnowledgeGaps: ["Chain Rule"],
+            historicallyConfusingConcepts: ["Gradient Descent"],
+            masteryStates: ["loss function": .struggling]
+        )
+
+        let candidate = TeachMeEngine().selectConcept(adaptiveContext: context, manualConcept: "Manual Topic")
+
+        XCTAssertEqual(candidate?.conceptName, "Chain Rule")
+        XCTAssertEqual(candidate?.source, .knowledgeGap)
+    }
+
+    func testTeachMeUsesMasteryFallbackWhenNoGapsExist() {
+        let context = AdaptiveExplanationContext(
+            masteryStates: [
+                "derivative": .struggling,
+                "matrix": .mastered
+            ]
+        )
+
+        let candidate = TeachMeEngine().selectConcept(adaptiveContext: context, manualConcept: "Manual Topic")
+
+        XCTAssertEqual(candidate?.conceptName, "derivative")
+        XCTAssertEqual(candidate?.source, .weakMastery)
     }
 
 }

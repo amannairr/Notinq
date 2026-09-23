@@ -105,7 +105,7 @@ final class AIEvaluationRunner {
     }
 
     func compare(baseline: AIEvaluationRunManifest, comparison: AIEvaluationRunManifest) -> AIEvaluationComparisonReport {
-        let byID = Dictionary(uniqueKeysWithValues: baseline.noteResults.map { ($0.noteID, $0) })
+        let byID = Dictionary(baseline.noteResults.map { ($0.noteID, $0) }, uniquingKeysWith: { first, _ in first })
         let comparisons = comparison.noteResults.map { current in
             let previous = byID[current.noteID]
             let scoreDelta = current.localScores.overall - (previous?.localScores.overall ?? 0)
@@ -751,8 +751,8 @@ final class AIEvaluationRunner {
         baselineVersion: String,
         comparisonVersion: String
     ) -> AIPromptVersionComparisonReport {
-        let baselineByID = Dictionary(uniqueKeysWithValues: baseline.map { ($0.identifier, $0) })
-        let comparisonByID = Dictionary(uniqueKeysWithValues: comparison.map { ($0.identifier, $0) })
+        let baselineByID = Dictionary(baseline.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
+        let comparisonByID = Dictionary(comparison.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
         let identifiers = Set(baselineByID.keys).union(comparisonByID.keys).sorted()
         let changes = identifiers.compactMap { identifier -> AIPromptVersionComparison? in
             guard let baselineEntry = baselineByID[identifier], let comparisonEntry = comparisonByID[identifier] else { return nil }

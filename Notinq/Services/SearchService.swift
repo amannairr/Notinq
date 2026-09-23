@@ -16,7 +16,7 @@ final class SearchService {
     }
 
     func search(_ request: SearchRequest) -> [SearchResult] {
-        let folderLookup = Dictionary(uniqueKeysWithValues: request.folders.map { ($0.id, $0.title) })
+        let folderLookup = Dictionary(request.folders.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         let hits = retriever.retrieve(query: request.query, limit: 32)
         let filtered = request.currentNoteID.map { currentID in
             hits.filter { $0.noteID == currentID }

@@ -102,6 +102,25 @@ nonisolated final class ReviewScheduler {
             recordsByID[record.conceptID] = record
         }
         return Array(recordsByID.values)
+            .sorted(by: masteryRecordReviewSort)
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func masteryRecordReviewSort(_ lhs: StudentConceptRecord, _ rhs: StudentConceptRecord) -> Bool {
+        let lhsDays = retentionEngine.daysUntilReview(for: lhs)
+        let rhsDays = retentionEngine.daysUntilReview(for: rhs)
+        if lhsDays != rhsDays {
+            return lhsDays < rhsDays
+        }
+
+        let lhsUrgency = retentionEngine.reviewUrgency(for: lhs)
+        let rhsUrgency = retentionEngine.reviewUrgency(for: rhs)
+        if lhsUrgency != rhsUrgency {
+            return lhsUrgency > rhsUrgency
+        }
+
+        return lhs.conceptID.localizedCaseInsensitiveCompare(rhs.conceptID) == .orderedAscending
     }
 
     private func conceptName(for conceptID: String) -> String? {

@@ -48,7 +48,7 @@ enum AIRequestKind {
     case noteCompletenessAnalysis
     case knowledgeGraphExtraction
     case followUp
-    case editorExpand
+    case editorProposal
 
     var maxTokens: Int32 {
         let cap = AIRuntimeConfig.current.llama.maxTokens
@@ -85,7 +85,7 @@ enum AIRequestKind {
             return min(max(cap, 768), 960)
         case .followUp:
             return min(cap, 300)
-        case .editorExpand:
+        case .editorProposal:
             return min(cap, 420)
         }
     }
@@ -198,27 +198,50 @@ final class AIService {
         }
     }
 
+    @discardableResult
     func editorProposal(
         action: AIEditorAction,
         selectedText: String,
         noteContext: String,
         noteID: UUID? = nil,
-        completion: @escaping (String) -> Void
-    ) {
+        completion: @escaping (AIProposalGenerationResult) -> Void
+    ) -> Task<Void, Never> {
         Task {
+            if action == .dontUnderstand {
+                let response = await sourceBackedAdaptiveProposalResponse(
+                    selectedText: selectedText,
+                    noteContext: noteContext,
+                    noteID: noteID,
+                    requestKind: "editorProposal.\(action.rawValue)",
+                    maxTokens: AIRequestKind.editorProposal.maxTokens
+                )
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    completion(response)
+                }
+                return
+            }
+
             let prompt = Self.editorProposalPrompt(
                 action: action,
                 selectedText: selectedText,
                 noteContext: noteContext
             )
-            let response = await adaptiveTextResponse(
+            let response = await adaptiveTextResponseWithContext(
                 question: prompt,
                 noteID: noteID,
                 requestKind: "editorProposal.\(action.rawValue)",
-                maxTokens: AIRequestKind.editorExpand.maxTokens
+                maxTokens: AIRequestKind.editorProposal.maxTokens
             )
+            let adaptiveContext = response.context.map(AdaptiveExplanationContext.fromTutorContext)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                completion(response)
+                completion(
+                    AIProposalGenerationResult(
+                        generatedText: response.text,
+                        adaptiveExplanationContext: action == .dontUnderstand ? adaptiveContext : nil
+                    )
+                )
             }
         }
     }
@@ -228,31 +251,25 @@ final class AIService {
         selectedText: String,
         noteContext: String
     ) -> String {
-        switch action {
-        case .expand:
-            return [
-                "Expand the selected idea into clearer educational prose.",
-                "Preserve the original meaning and important terminology.",
-                "Do not invent facts not supported by the selected text or surrounding note context.",
-                "Use surrounding note context only to improve terminology, coherence, and level; do not let unrelated context override the selected idea.",
-                "Match the level and style of the surrounding notes.",
-                "Add useful explanation without unnecessary verbosity.",
-                "Return clean Markdown suitable for rich text rendering.",
-                "Selected text:",
-                selectedText,
-                "Surrounding note context:",
-                String(noteContext.prefix(1_500))
-            ].joined(separator: "\n\n")
-        case .explain:
-            return [
-                "Explain the selected idea clearly using the surrounding note context when relevant.",
-                "Return clean Markdown suitable for rich text rendering.",
-                "Selected text:",
-                selectedText,
-                "Surrounding note context:",
-                String(noteContext.prefix(1_500))
-            ].joined(separator: "\n\n")
-        }
+        AIActionPromptBuilder().prompt(
+            action: action,
+            selectedText: selectedText,
+            noteContext: noteContext
+        )
+    }
+
+    static func editorProposalPrompt(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String,
+        adaptiveContext: AdaptiveExplanationContext?
+    ) -> String {
+        AIActionPromptBuilder().prompt(
+            action: action,
+            selectedText: selectedText,
+            noteContext: noteContext,
+            adaptiveContext: adaptiveContext
+        )
     }
 
     func streamFollowUp(
@@ -444,6 +461,127 @@ final class AIService {
         return (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
     }
 
+    private func adaptiveTextResponseWithContext(
+        question: String,
+        noteID: UUID?,
+        requestKind: String,
+        maxTokens: Int32
+    ) async -> (text: String, context: AdaptiveTutorContext?) {
+        do {
+            let context = try await adaptiveTutorService.buildContext(question: question, noteID: noteID)
+            let request = adaptiveTutorService.request(for: context, requestKind: requestKind, maxTokens: maxTokens)
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return (text, context)
+        } catch {
+            let request = AIGenerationRequest(
+                prompt: question,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.92,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: ["requestKind": requestKind, "graphAware": "false"]
+            )
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return (text, nil)
+        }
+    }
+
+    private func sourceBackedAdaptiveProposalResponse(
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID?,
+        requestKind: String,
+        maxTokens: Int32
+    ) async -> AIProposalGenerationResult {
+        do {
+            let seedPrompt = Self.editorProposalPrompt(
+                action: .dontUnderstand,
+                selectedText: selectedText,
+                noteContext: noteContext
+            )
+            let context = try await adaptiveTutorService.buildContext(question: seedPrompt, noteID: noteID)
+            var adaptiveContext = AdaptiveExplanationContext.fromTutorContext(context)
+            adaptiveContext.selectedText = selectedText
+            let profiles = ConceptLearningProfileBuilder().profiles(
+                for: adaptiveContext.conceptIDs,
+                signals: LearningSignalStore.shared.allSignals()
+            )
+            adaptiveContext.applyLearningProfiles(
+                Array(profiles.values),
+                conceptNameByID: Self.conceptNameByID(from: context)
+            )
+            let groundedPrompt = Self.editorProposalPrompt(
+                action: .dontUnderstand,
+                selectedText: selectedText,
+                noteContext: noteContext,
+                adaptiveContext: adaptiveContext
+            )
+            let request = AIGenerationRequest(
+                prompt: groundedPrompt,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.9,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: [
+                    "requestKind": requestKind,
+                    "graphAware": "true",
+                    "sourceBacked": adaptiveContext.hasSourceGrounding ? "true" : "false",
+                    "adaptiveContextSources": "\(adaptiveContext.retrievedNoteSources.count)"
+                ]
+            )
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return AIProposalGenerationResult(
+                generatedText: text,
+                adaptiveExplanationContext: adaptiveContext
+            )
+        } catch {
+            let fallbackContext = AdaptiveExplanationContext.unavailable()
+            let prompt = Self.editorProposalPrompt(
+                action: .dontUnderstand,
+                selectedText: selectedText,
+                noteContext: noteContext,
+                adaptiveContext: fallbackContext
+            )
+            let request = AIGenerationRequest(
+                prompt: prompt,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.9,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: [
+                    "requestKind": requestKind,
+                    "graphAware": "false",
+                    "sourceBacked": "false"
+                ]
+            )
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return AIProposalGenerationResult(
+                generatedText: text,
+                adaptiveExplanationContext: fallbackContext
+            )
+        }
+    }
+
+    private static func conceptNameByID(from context: AdaptiveTutorContext) -> [String: String] {
+        var names: [String: String] = [:]
+        let concepts = context.weakConcepts
+            + context.strongConcepts
+            + context.missingPrerequisites
+            + context.knowledgeGaps
+            + context.relevantConcepts
+            + context.relatedConcepts
+        for concept in concepts {
+            names[concept.id.uuidString] = concept.name
+        }
+        return names
+    }
+
     private func adaptiveRequest(
         question: String,
         noteID: UUID?,
@@ -496,7 +634,7 @@ final class AIService {
     }
 
     private func mergeStudyMemory(existing: [StudyMemoryEntry], adaptive: [StudyMemoryEntry]) -> [StudyMemoryEntry] {
-        var byConcept = Dictionary(uniqueKeysWithValues: existing.map { ($0.concept, $0) })
+        var byConcept = Dictionary(existing.map { ($0.concept, $0) }, uniquingKeysWith: { first, _ in first })
         for entry in adaptive where byConcept[entry.concept] == nil {
             byConcept[entry.concept] = entry
         }

@@ -504,6 +504,91 @@ private extension StudyView {
         }
     }
 
+    private func startTeachMeSession() {
+        let context = teachMeAdaptiveContext()
+        let manualConcept = extractConceptCandidates(from: noteContentSource, limit: 1).first ?? noteLabel
+        let session = TeachMeEngine().startSession(
+            adaptiveContext: context,
+            manualConcept: manualConcept
+        )
+        teachMeDraftAnswer = ""
+        persistTeachMeSession(session)
+        transientStatusMessage = session.activeConceptName.map { "Teach Me question ready for \($0)." } ?? "No concept available for Teach Me yet."
+    }
+
+    private func submitTeachMeAnswer() {
+        guard let current = studyData.teachMeSession,
+              let question = current.activeQuestion else { return }
+
+        let submitted = TeachMeEngine().submitAnswer(teachMeDraftAnswer, for: current)
+        if let response = submitted.answerHistory.last {
+            let recorder = LearningSignalRecorder()
+            recorder.recordTeachMeAttempt(question: question)
+            recorder.recordTeachMeEvaluation(question: question, evaluation: response.evaluation)
+        }
+        teachMeDraftAnswer = ""
+        persistTeachMeSession(submitted)
+    }
+
+    private func advanceTeachMeSession() {
+        guard let current = studyData.teachMeSession else { return }
+        let advanced = TeachMeEngine().advanceAfterFeedback(current)
+        teachMeDraftAnswer = ""
+        persistTeachMeSession(advanced)
+    }
+
+    private func persistTeachMeSession(_ session: TeachMeSession) {
+        mutateStudyData { studyData in
+            studyData.teachMeSession = session
+            studyData.lastGeneratedAt = Date()
+        }
+    }
+
+    private func teachMeAdaptiveContext() -> AdaptiveExplanationContext {
+        let gaps = studyData.notebookKnowledgeGaps.isEmpty
+            ? buildNotebookKnowledgeGaps(currentNoteText: noteContentSource)
+            : studyData.notebookKnowledgeGaps
+        let gapTitles = gaps
+            .sorted { $0.priority > $1.priority }
+            .map(\.title)
+        let historicallyConfusing = studyData.learningMemory
+            .filter { $0.missedCount > $0.masteredCount }
+            .sorted { $0.missedCount > $1.missedCount }
+            .map(\.concept)
+        let masteryStates = Dictionary(
+            studyData.learningMemory.map { entry in
+                (TeachMeEngine.conceptID(for: entry.concept), MasteryState.state(for: entry.masteryScore))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let sourceExcerpt = noteContentSource
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sources = sourceExcerpt.isEmpty ? [] : [
+            AdaptiveExplanationSource(
+                sourceID: noteID?.uuidString ?? UUID().uuidString,
+                sourceType: "note",
+                noteID: noteID,
+                noteTitle: noteLabel,
+                snippet: sourceExcerpt,
+                relevantExcerpt: sourceExcerpt
+            )
+        ]
+
+        return AdaptiveExplanationContext(
+            selectedText: selectedText,
+            conceptIDs: gapTitles.map(TeachMeEngine.conceptID(for:)),
+            identifiedKnowledgeGaps: gapTitles,
+            historicallyConfusingConcepts: historicallyConfusing,
+            masteryStates: masteryStates,
+            retrievedNoteSources: sources,
+            inferredLearnerLevel: "Study Session",
+            confidence: gapTitles.isEmpty ? 0.35 : 0.7
+        )
+    }
+
     func mutateStudyData(_ mutation: (inout NoteStudyData) -> Void) {
         guard let noteID else { return }
         appState.mutateStudyData(for: noteID) { studyData in
@@ -1516,6 +1601,8 @@ private extension StudyView {
 
     func supplementalSectionContent(for section: SupplementalStudySection) -> AnyView {
         switch section {
+        case .teachMe:
+            return AnyView(teachMeSection)
         case .learningMemory:
             return AnyView(learningMemorySection)
         case .knowledgeGaps:
@@ -1530,6 +1617,96 @@ private extension StudyView {
             return AnyView(activeRecallSection)
         case .streaks:
             return AnyView(streaksSection)
+        }
+    }
+
+    private var teachMeSection: some View {
+        let session = studyData.teachMeSession ?? TeachMeSession()
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                statPill(title: "State", value: teachMeStateLabel(session.state))
+                statPill(title: "Concept", value: session.activeConceptName ?? "None")
+            }
+
+            if let question = session.activeQuestion {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(question.conceptName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(question.question)
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let gap = question.originatingKnowledgeGap, !gap.isEmpty {
+                        Text("Gap: \(gap)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let source = question.sourceReferences.first {
+                        Text("Source: \(source.noteTitle)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.studySurface)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                emptyCompactState(
+                    title: "No active Teach Me question",
+                    message: "Start from a knowledge gap, confusing concept, weak mastery item, or the current selection."
+                )
+            }
+
+            switch session.state {
+            case .idle, .complete:
+                HStack(spacing: 8) {
+                    quickAction("Start", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "play.fill") {
+                        startTeachMeSession()
+                    }
+                    if session.state == .complete {
+                        quickAction("Reset", tint: Color.textSecondary, icon: "arrow.counterclockwise") {
+                            persistTeachMeSession(TeachMeSession())
+                        }
+                    }
+                }
+            case .question:
+                quickAction("Answer", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "square.and.pencil") {
+                    persistTeachMeSession(TeachMeEngine().beginAnswering(session))
+                }
+            case .answering:
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $teachMeDraftAnswer)
+                        .font(.body)
+                        .frame(minHeight: 88)
+                        .padding(8)
+                        .background(Color.studySurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    quickAction("Submit", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "checkmark") {
+                        submitTeachMeAnswer()
+                    }
+                    .disabled(teachMeDraftAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            case .feedback:
+                if let response = session.answerHistory.last {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(teachMeEvaluationTitle(response.evaluation))
+                            .font(.subheadline.weight(.semibold))
+                        Text(response.feedback)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.studySurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                quickAction("Continue", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "arrow.right") {
+                    advanceTeachMeSession()
+                }
+            }
         }
     }
 
@@ -2951,6 +3128,8 @@ private extension StudyView {
 
     private func toolTint(forSupplemental section: SupplementalStudySection) -> Color {
         switch section {
+        case .teachMe:
+            return Color(red: 0.24, green: 0.49, blue: 0.59)
         case .learningMemory:
             return Color(red: 0.24, green: 0.49, blue: 0.59)
         case .knowledgeGaps:
@@ -2970,6 +3149,8 @@ private extension StudyView {
 
     private func supplementalSubtitle(for section: SupplementalStudySection) -> String {
         switch section {
+        case .teachMe:
+            return "Turn a gap into one short question and feedback."
         case .learningMemory:
             return "Track what feels solid and what still needs review."
         case .knowledgeGaps:
@@ -2984,6 +3165,32 @@ private extension StudyView {
             return "Hide the answer first, then reveal it only after you think."
         case .streaks:
             return "Keep lightweight study stats without clutter."
+        }
+    }
+
+    private func teachMeStateLabel(_ state: TeachMeSessionState) -> String {
+        switch state {
+        case .idle:
+            return "Idle"
+        case .question:
+            return "Question"
+        case .answering:
+            return "Answering"
+        case .feedback:
+            return "Feedback"
+        case .complete:
+            return "Complete"
+        }
+    }
+
+    private func teachMeEvaluationTitle(_ evaluation: TeachMeEvaluation) -> String {
+        switch evaluation {
+        case .correct:
+            return "Correct"
+        case .partiallyCorrect:
+            return "Partially Correct"
+        case .incorrect:
+            return "Needs Review"
         }
     }
 
@@ -3209,6 +3416,7 @@ struct NoteStudyData: Codable, Equatable {
     var conceptMap: [StudyConceptNode] = []
     var activeRecallPrompts: [StudyActiveRecallPrompt] = []
     var notebookKnowledgeGaps: [StudyKnowledgeGap] = []
+    var teachMeSession: TeachMeSession?
     var lastGeneratedAt: Date?
 }
 
@@ -3411,6 +3619,7 @@ private enum StudySummaryMode: String, CaseIterable, Identifiable {
 }
 
 enum SupplementalStudySection: String, CaseIterable, Identifiable {
+    case teachMe = "Teach Me"
     case conceptMap = "Concept Map"
     case learningMemory = "Learning Memory"
     case knowledgeGaps = "Knowledge Gaps"
@@ -3423,6 +3632,8 @@ enum SupplementalStudySection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .teachMe:
+            return "graduationcap"
         case .learningMemory:
             return "memorychip"
         case .knowledgeGaps:
@@ -3484,6 +3695,7 @@ struct StudyView: View {
     @State private var selectedSummaryMode: StudySummaryMode = .executive
     @State private var expandedSupplementalSections: Set<SupplementalStudySection> = []
     @State private var expandedConceptNodeIDs: Set<UUID> = []
+    @State private var teachMeDraftAnswer: String = ""
     @State private var transientStatusMessage: String?
     @State private var studyScrollContentHeight: CGFloat = 0
     @State private var studyScrollViewportHeight: CGFloat = 0

@@ -540,8 +540,8 @@ extension StudyKnowledgeSnapshot {
                 }
             )
         }
-        let conceptIDByTitle = Dictionary(uniqueKeysWithValues: zip(concepts.map(\.title), conceptItems.map(\.id)))
-        let titleByConceptID = Dictionary(uniqueKeysWithValues: zip(conceptItems.map(\.id), conceptItems.map(\.name)))
+        let conceptIDByTitle = Dictionary(zip(concepts.map(\.title), conceptItems.map(\.id)), uniquingKeysWith: { first, _ in first })
+        let titleByConceptID = Dictionary(zip(conceptItems.map(\.id), conceptItems.map(\.name)), uniquingKeysWith: { first, _ in first })
 
         let definitionItems = definitions.map { item in
             KnowledgeDefinition(
@@ -1071,9 +1071,9 @@ extension StructuredKnowledge {
         supportingEvidence: [String] = []
     ) -> StructuredKnowledge {
         let resolved = ConceptResolver().resolve(payload.concepts)
-        let conceptsByID = Dictionary(uniqueKeysWithValues: resolved.concepts.map { ($0.id, $0) })
-        let conceptsByNormalizedName = Dictionary(uniqueKeysWithValues: resolved.concepts.map { (Self.normalizedKey(for: $0.name), $0) })
-        let sourceReferencesByID = Dictionary(uniqueKeysWithValues: payload.sourceReferences.map { ($0.chunkID, $0) })
+        let conceptsByID = Dictionary(resolved.concepts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let conceptsByNormalizedName = Dictionary(resolved.concepts.map { (Self.normalizedKey(for: $0.name), $0) }, uniquingKeysWith: { first, _ in first })
+        let sourceReferencesByID = Dictionary(payload.sourceReferences.map { ($0.chunkID, $0) }, uniquingKeysWith: { first, _ in first })
 
         func sourceLocations(for chunkIDs: [String], title: String, snippet: String = "") -> [KnowledgeSourceLocation] {
             Self.dedupeStrings(chunkIDs).enumerated().map { index, chunkID in
@@ -1112,8 +1112,8 @@ extension StructuredKnowledge {
             )
         }
 
-        let legacyConceptIDByName = Dictionary(uniqueKeysWithValues: legacyConcepts.map { (Self.normalizedKey(for: $0.name), $0.id) })
-        let legacyConceptNameByID = Dictionary(uniqueKeysWithValues: legacyConcepts.map { ($0.id, $0.name) })
+        let legacyConceptIDByName = Dictionary(legacyConcepts.map { (Self.normalizedKey(for: $0.name), $0.id) }, uniquingKeysWith: { first, _ in first })
+        let legacyConceptNameByID = Dictionary(legacyConcepts.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
 
         let legacyRelationships = payload.relationships.compactMap { relationship -> KnowledgeRelationship? in
             let sourceID = relationship.sourceID.trimmingCharacters(in: .whitespacesAndNewlines)

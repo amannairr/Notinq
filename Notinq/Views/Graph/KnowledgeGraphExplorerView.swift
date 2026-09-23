@@ -394,7 +394,7 @@ struct KnowledgeGraphExplorerView: View {
         guard viewModel.nodes.isEmpty == false else { return [:] }
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let radius = max(90, min(size.width, size.height) * 0.34)
-        return Dictionary(uniqueKeysWithValues: viewModel.nodes.enumerated().map { index, node in
+        return Dictionary(viewModel.nodes.enumerated().map { index, node in
             let angle = (Double(index) / Double(max(viewModel.nodes.count, 1))) * Double.pi * 2
             return (
                 node.id,
@@ -403,7 +403,7 @@ struct KnowledgeGraphExplorerView: View {
                     y: center.y + CGFloat(sin(angle)) * radius
                 )
             )
-        })
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     private func masteryColor(_ mastery: Double) -> Color {

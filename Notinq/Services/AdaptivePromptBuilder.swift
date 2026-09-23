@@ -28,7 +28,7 @@ final class AdaptivePromptBuilder {
             return "GRAPH CONTEXT\n\(graphText)"
         }
 
-        let nameByID = Dictionary(uniqueKeysWithValues: context.relatedConcepts.map { ($0.id, $0.name) })
+        let nameByID = Dictionary(context.relatedConcepts.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let relationshipLines = context.relationships.prefix(24).compactMap { relationship -> String? in
             guard let source = nameByID[relationship.sourceConceptID],
                   let target = nameByID[relationship.destinationConceptID] else { return nil }

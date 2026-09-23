@@ -243,7 +243,7 @@ final class ContextBuilder {
         let mastery = noteID.flatMap { try? studyRepository.studentConcepts(for: $0) }
             ?? (try? studentConceptService.recentlyReviewedConcepts(limit: 6)) ?? []
         let recentReviewHistory = noteID.flatMap { try? studyRepository.reviewEvents(for: $0) } ?? []
-        let conceptTitleByID = Dictionary(uniqueKeysWithValues: graphConcepts.map { ($0.id, $0.canonicalName) })
+        let conceptTitleByID = Dictionary(graphConcepts.map { ($0.id, $0.canonicalName) }, uniquingKeysWith: { first, _ in first })
         let tutorContext = TutorContext(
             noteID: noteID,
             noteTitle: title,

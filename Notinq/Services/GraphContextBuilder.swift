@@ -22,7 +22,7 @@ struct GraphContext: Codable, Equatable, Sendable {
     func graphPromptRepresentation(maxRelationships: Int = 24, maxChains: Int = 8, maxPaths: Int = 8) -> String {
         guard isEmpty == false else { return "" }
 
-        let nameByID = Dictionary(uniqueKeysWithValues: concepts.map { ($0.id, $0.canonicalName) })
+        let nameByID = Dictionary(concepts.map { ($0.id, $0.canonicalName) }, uniquingKeysWith: { first, _ in first })
         var lines: [String] = ["Knowledge Graph"]
 
         let grouped = Dictionary(grouping: relationships.prefix(maxRelationships), by: \.sourceConceptID)

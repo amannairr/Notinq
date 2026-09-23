@@ -103,11 +103,11 @@ final class NoteService {
     }
 
     private func syncKnowledge(previousFolders: [NoteFolder], currentFolders: [NoteFolder]) {
-        let previousSnapshots = Dictionary(uniqueKeysWithValues: previousFolders.flatMap { folder in
+        let previousSnapshots = Dictionary(previousFolders.flatMap { folder in
             folder.notes.map { note in
                 (note.id, NoteSnapshot(id: note.id, title: note.title, content: note.content, updatedAt: note.updatedAt))
             }
-        })
+        }, uniquingKeysWith: { first, _ in first })
 
         let currentSnapshots = currentFolders.flatMap { folder in
             folder.notes.map { note in

@@ -11,6 +11,7 @@ struct ActionIcon: View {
 
     let name: String
     let label: String
+    var disabled = false
     let action: () -> Void
 
     @State private var hover = false
@@ -23,7 +24,7 @@ struct ActionIcon: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 16, height: 16)
-                .opacity(hover ? 1 : 0.8)
+                .opacity(disabled ? 0.45 : (hover ? 1 : 0.8))
 
                 .frame(width: 32, height: 32)
                 .background(
@@ -36,6 +37,7 @@ struct ActionIcon: View {
                 .animation(.easeInOut(duration: 0.14), value: hover)
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
         .onHover { hover = $0 }
         .gesture(
             DragGesture(minimumDistance: 0)
