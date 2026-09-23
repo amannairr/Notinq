@@ -119,9 +119,9 @@ struct LearningInsightsPanelView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Student Notes")
+                Text("Current Note")
                     .font(.headline)
-                Text(studentNotes.isEmpty ? "No note content available for this note yet." : studentNotes)
+                Text(studentNotes.isEmpty ? "No note content is available yet." : studentNotes)
                     .font(.system(.body, design: .rounded))
                     .foregroundStyle(studentNotes.isEmpty ? .secondary : .primary)
                     .lineSpacing(3)

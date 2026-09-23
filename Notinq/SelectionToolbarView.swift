@@ -9,10 +9,15 @@ import SwiftUI
 
 struct SelectionToolbarView: View {
 
+    var areProposalActionsDisabled = false
     var onSummarize: () -> Void
+    var onExpand: () -> Void
     var onSimplify: () -> Void
     var onRewrite: () -> Void
     var onExplain: () -> Void
+    var onExample: () -> Void
+    var onAnalogy: () -> Void
+    var onDontUnderstand: () -> Void
     var onFlashcards: () -> Void
     var onQuiz: () -> Void
     var onAdd: () -> Void
@@ -21,27 +26,40 @@ struct SelectionToolbarView: View {
     @State private var visible = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            ActionIcon(name: "summary", label: "Summarize", action: onSummarize)
-            actionPill("Simplify", action: onSimplify)
-            ActionIcon(name: "rewrite", label: "Rewrite", action: onRewrite)
-            ActionIcon(name: "explain", label: "Explain", action: onExplain)
-            actionPill("Flashcards", action: onFlashcards)
-            actionPill("Quiz", action: onQuiz)
-            actionPill("Copy", action: onCopy)
-            ActionIcon(name: "ask", label: "Ask AI", action: onAdd)
+        HStack(spacing: 10) {
+            actionGroup {
+                ActionIcon(name: "summary", label: "Summarize", action: onSummarize)
+                actionPill("Expand", disabled: areProposalActionsDisabled, action: onExpand)
+                actionPill("Simplify", disabled: areProposalActionsDisabled, action: onSimplify)
+                ActionIcon(name: "rewrite", label: "Rewrite", action: onRewrite)
+                ActionIcon(name: "explain", label: "Explain", disabled: areProposalActionsDisabled, action: onExplain)
+                actionPill("Example", disabled: areProposalActionsDisabled, action: onExample)
+                actionPill("Analogy", disabled: areProposalActionsDisabled, action: onAnalogy)
+                actionPill("I Don't Understand This", disabled: areProposalActionsDisabled, action: onDontUnderstand)
+            }
+
+            Divider()
+                .frame(height: 24)
+
+            actionGroup {
+                actionPill("Flashcards", action: onFlashcards)
+                actionPill("Quiz", action: onQuiz)
+                actionPill("Copy", action: onCopy)
+                ActionIcon(name: "ask", label: "Ask AI", action: onAdd)
+            }
         }
-        .padding(6)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.borderSubtle, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.borderSubtle.opacity(0.85), lineWidth: 0.6)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.06), radius: 10, y: 3)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
         .scaleEffect(visible ? 1 : 0.92)
         .opacity(visible ? 1 : 0)
         .onAppear {
@@ -55,15 +73,44 @@ struct SelectionToolbarView: View {
         selectionRange.length > 0
     }
 
-    private func actionPill(_ title: String, action: @escaping () -> Void) -> some View {
+    static let actionLabels = [
+        "Summarize",
+        "Expand",
+        "Simplify",
+        "Rewrite",
+        "Explain",
+        "Example",
+        "Analogy",
+        "I Don't Understand This",
+        "Flashcards",
+        "Quiz",
+        "Copy",
+        "Ask AI"
+    ]
+
+    private func actionPill(_ title: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: 11.5, weight: .semibold))
             .foregroundColor(Color.textSecondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color.hoverWarm)
-            .clipShape(Capsule())
+            .opacity(disabled ? 0.45 : 1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.hoverWarm.opacity(0.9))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.borderSubtle.opacity(0.45), lineWidth: 0.6)
+            )
             .buttonStyle(.plain)
+            .disabled(disabled)
             .help(title)
+    }
+
+    private func actionGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 7) {
+            content()
+        }
     }
 }

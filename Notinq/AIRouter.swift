@@ -1,8 +1,8 @@
 import Foundation
 
 final class AIRouter {
-    func route(contextLength: Int) -> any GenerationModelProvider {
+    func route(contextLength: Int) -> any AIProviderProtocol {
         _ = contextLength
-        return LlamaProvider.shared
+        return InferenceEngine.shared.activeProvider
     }
 }

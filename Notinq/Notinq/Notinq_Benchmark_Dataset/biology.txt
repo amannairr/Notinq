@@ -1,0 +1,8 @@
+[00:00] Professor: Today we discuss biology.
+[02:00] Professor: Key concepts include Cell, DNA, Gene, Protein, Evolution, Natural Selection, Ecosystem.
+[05:00] Professor: DNA encodes Protein.
+[05:00] Professor: Natural Selection drives Evolution.
+[05:00] Professor: Organism lives_in Ecosystem.
+[08:00] Professor: DNA stores genetic information.
+[08:00] Professor: Proteins perform many cellular functions.
+[08:00] Professor: Natural selection contributes to evolution.

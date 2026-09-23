@@ -70,28 +70,14 @@ struct EditorTopBar: View {
             )
 
             HStack(spacing: 0) {
-                overflowButtonSlot(edge: .leading, isVisible: showLeadingCue)
+                toolbarStrip(
+                    showLeadingCue: showLeadingCue,
+                    showTrailingCue: showTrailingCue
+                )
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        toolbarSection {
-                            leadingToolbarControls
-                        }
-
-                        toolbarSection {
-                            trailingToolbarControls
-                        }
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 24)
-                    .background(renderedToolbarWidthReader)
-                    .background(horizontalOffsetReader(binding: $toolbarScrollOffset, scrollView: $toolbarScrollView))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .clipped()
-
-                overflowButtonSlot(edge: .trailing, isVisible: showTrailingCue)
+                alwaysVisibleActionControls
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 22)
             .padding(.vertical, 11)
             .background(.ultraThinMaterial)
@@ -105,6 +91,34 @@ struct EditorTopBar: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func toolbarStrip(showLeadingCue: Bool, showTrailingCue: Bool) -> some View {
+        HStack(spacing: 0) {
+            overflowButtonSlot(edge: .leading, isVisible: showLeadingCue)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    toolbarSection {
+                        leadingToolbarControls
+                    }
+
+                    toolbarSection {
+                        overflowToolbarControls
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 24)
+                .background(renderedToolbarWidthReader)
+                .background(horizontalOffsetReader(binding: $toolbarScrollOffset, scrollView: $toolbarScrollView))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
+
+            overflowButtonSlot(edge: .trailing, isVisible: showTrailingCue)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -258,72 +272,77 @@ struct EditorTopBar: View {
     }
 
     @ViewBuilder
-    private var trailingToolbarControls: some View {
-        Button(action: onGenerateStudyMaterials) {
-            HStack(spacing: 7) {
-                if isGeneratingStudyMaterials {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "book.pages")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                Text(isGeneratingStudyMaterials ? "Generating..." : "Generate Study Materials")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundColor(canGenerateStudyMaterials ? Color.white : Color.textTertiary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(
-                Group {
-                    if canGenerateStudyMaterials {
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.24, green: 0.49, blue: 0.59),
-                                Color(red: 0.30, green: 0.62, blue: 0.53)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+    private var alwaysVisibleActionControls: some View {
+        HStack(spacing: 8) {
+            Button(action: onGenerateStudyMaterials) {
+                HStack(spacing: 7) {
+                    if isGeneratingStudyMaterials {
+                        ProgressView()
+                            .controlSize(.small)
                     } else {
-                        Color.hoverWarm
+                        Image(systemName: "book.pages")
+                            .font(.system(size: 12, weight: .semibold))
                     }
+                    Text(isGeneratingStudyMaterials ? "Generating..." : "Generate Study Materials")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
                 }
-            )
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(isGeneratingStudyMaterials)
-        .toolbarTooltip("Generate Study Materials")
-
-        Button(action: onAnalyzeLecture) {
-            HStack(spacing: 7) {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Analyze Lecture")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundColor(Color.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.16, green: 0.49, blue: 0.86),
-                        Color(red: 0.27, green: 0.62, blue: 0.92)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+                .foregroundColor(canGenerateStudyMaterials ? Color.white : Color.textTertiary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Group {
+                        if canGenerateStudyMaterials {
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.24, green: 0.49, blue: 0.59),
+                                    Color(red: 0.30, green: 0.62, blue: 0.53)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        } else {
+                            Color.hoverWarm
+                        }
+                    }
                 )
-            )
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(!canGenerateStudyMaterials)
-        .toolbarTooltip("Open Learning Insights")
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isGeneratingStudyMaterials)
+            .toolbarTooltip("Generate Study Materials")
 
+            Button(action: onAnalyzeLecture) {
+                HStack(spacing: 7) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Analyze Lecture")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundColor(Color.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.16, green: 0.49, blue: 0.86),
+                            Color(red: 0.27, green: 0.62, blue: 0.92)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canGenerateStudyMaterials)
+            .toolbarTooltip("Open Learning Insights")
+        }
+    }
+
+    @ViewBuilder
+    private var overflowToolbarControls: some View {
         Button(action: onUpdateKnowledgeGraph) {
             HStack(spacing: 7) {
                 if isKnowledgeGraphGenerating {
@@ -526,14 +545,8 @@ private struct HorizontalScrollOffsetReader: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: OffsetTrackingView, context: Context) {
-        nsView.onOffsetChange = { offset in
-            self.offset = offset
-        }
-        nsView.onScrollViewChange = { scrollView in
-            self.scrollView = scrollView
-        }
-    }
+    func updateNSView(_ nsView: OffsetTrackingView, context: Context) {}
+
 }
 
 private struct ToolbarContentWidthPreferenceKey: PreferenceKey {

@@ -317,7 +317,7 @@ struct LearningInsightsWorkspaceView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader(
                 title: "Lecture Sources",
-                subtitle: "Paste transcript and slide text here. The student notes are taken from the current note.",
+                subtitle: "Paste transcript and slide text here. The current note is used automatically as the student context.",
                 icon: "square.and.pencil",
                 tint: Color(red: 0.25, green: 0.48, blue: 0.60)
             )
@@ -360,7 +360,7 @@ struct LearningInsightsWorkspaceView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "note.text")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Student Notes")
+                    Text("Current Note")
                         .font(.headline)
                 }
 

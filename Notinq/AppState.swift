@@ -39,7 +39,7 @@ class AppState: ObservableObject {
     @Published var autoInsertTranscription: Bool = true
     @Published var useVoiceAsAICommandInput: Bool = false
 
-    private let storageFileName = "lumora-notes.json"
+    private let noteService = NoteService.shared
     private let defaults = UserDefaults.standard
 
     init() {
@@ -153,7 +153,6 @@ class AppState: ObservableObject {
         folders[folderIndex].notes[noteIndex].title = trimmed
         folders[folderIndex].notes[noteIndex].updatedAt = Date()
         save()
-        KnowledgeGraphManager.shared.generateGraph(note: folders[folderIndex].notes[noteIndex])
     }
 
     func deleteNote(_ noteID: UUID) {
@@ -170,7 +169,6 @@ class AppState: ObservableObject {
         if selectedNoteID == noteID {
             selectedNoteID = folders[folderIndex].notes.first?.id
         }
-        KnowledgeGraphManager.shared.deleteGraph(noteID: noteID)
         save()
     }
 
@@ -222,7 +220,6 @@ class AppState: ObservableObject {
         updatedFolders[location.folderIndex].notes[location.noteIndex].updatedAt = Date()
         folders = updatedFolders
         save()
-        KnowledgeGraphManager.shared.generateGraph(note: updatedFolders[location.folderIndex].notes[location.noteIndex])
     }
 
     func updateStudyData(_ newStudyData: NoteStudyData, for noteID: UUID) {
@@ -304,38 +301,11 @@ class AppState: ObservableObject {
     }
 
     private func save() {
-        let payload = NotesStoragePayload(
-            folders: folders,
-            selectedFolderID: selectedFolderID,
-            selectedNoteID: selectedNoteID
-        )
-        do {
-            let data = try JSONEncoder().encode(payload)
-            try data.write(to: storageURL, options: .atomic)
-        } catch {
-            print("Failed to save notes: \(error)")
-        }
+        noteService.saveFolders(folders)
     }
 
     private func load() {
-        do {
-            let data = try Data(contentsOf: storageURL)
-            let payload = try JSONDecoder().decode(NotesStoragePayload.self, from: data)
-            folders = payload.folders
-            selectedFolderID = payload.selectedFolderID
-            selectedNoteID = payload.selectedNoteID
-        } catch {
-            folders = []
-        }
-    }
-
-    private var storageURL: URL {
-        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let directory = baseURL.appendingPathComponent("Notinq", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        return directory.appendingPathComponent(storageFileName)
+        folders = noteService.loadFolders()
     }
 }
 

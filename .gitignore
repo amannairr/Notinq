@@ -1,13 +1,31 @@
-# macOS
-.DS_Store
-
 # Xcode
-xcuserdata/
 DerivedData/
+.derivedData/
+build/
+xcuserdata/
+*.xcuserstate
+Notinq.xcodeproj/xcuserdata/
+Notinq.xcodeproj/project.xcworkspace/xcuserdata/
+Notinq.xcodeproj/*.backup
+Notinq.xcodeproj/*.pre-gguf-removal
 
-# Local AI models
+# Test artifacts
+*.xcresult
+
+# Logs
+*.log
+
+# Local models
 *.gguf
 Models/
-Resources/Models/
+Notinq/Models/
+Notinq/Resources/Models/
+Notinq/Notinq/Models/
+Notinq/Notinq/Resources/Models/
 
+# Temp files
+result.json
+persistence-tests.exit
 
+# macOS
+.DS_Store

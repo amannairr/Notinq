@@ -50,6 +50,13 @@ struct DefaultStudentKnowledgeScheduler: StudentKnowledgeScheduling {
             updated.easeFactor = clamp(updated.easeFactor - 0.08, lower: configuration.minimumEaseFactor, upper: configuration.maximumEaseFactor)
             updated.learningStatus = priorReviewCount == 0 ? .firstLearning : .relearning
             updated.nextReviewDate = reviewedAt.addingTimeInterval(configuration.relearningInterval)
+        case .partial:
+            updated.correctAnswerCount += 1
+            updated.streak = 0
+            updated.masteryLevel = clamp(updated.masteryLevel + 0.03, lower: 0, upper: 1)
+            updated.easeFactor = clamp(updated.easeFactor - 0.02, lower: configuration.minimumEaseFactor, upper: configuration.maximumEaseFactor)
+            updated.learningStatus = priorReviewCount == 0 ? .firstLearning : .review
+            updated.nextReviewDate = reviewedAt.addingTimeInterval(configuration.learningInterval)
         case .incorrect:
             updated.incorrectAnswerCount += 1
             updated.streak = 0
@@ -82,6 +89,8 @@ struct DefaultStudentKnowledgeScheduler: StudentKnowledgeScheduling {
             return priorReviewCount == 0 ? 0.18 : 0.1
         case .hard:
             return 0.04
+        case .partial:
+            return 0.02
         case .incorrect:
             return -0.12
         }
@@ -95,6 +104,8 @@ struct DefaultStudentKnowledgeScheduler: StudentKnowledgeScheduling {
             return 0.08
         case .hard:
             return -0.04
+        case .partial:
+            return 0.01
         case .incorrect:
             return -0.12
         }

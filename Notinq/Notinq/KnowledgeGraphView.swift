@@ -306,16 +306,15 @@ enum KnowledgeGraphLayout {
 
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let radius = max(60, min(size.width, size.height) * 0.28)
-        var positions = Dictionary(uniqueKeysWithValues: concepts.enumerated().map { index, concept in
+        var positions = concepts.enumerated().reduce(into: [UUID: CGPoint]()) { result, element in
+            let index = element.offset
+            let concept = element.element
             let angle = (Double(index) / Double(max(concepts.count, 1))) * Double.pi * 2
-            return (
-                concept.id,
-                CGPoint(
-                    x: center.x + CGFloat(cos(angle)) * radius,
-                    y: center.y + CGFloat(sin(angle)) * radius
-                )
+            result[concept.id] = CGPoint(
+                x: center.x + CGFloat(cos(angle)) * radius,
+                y: center.y + CGFloat(sin(angle)) * radius
             )
-        })
+        }
 
         let iterations = 36
         let repulsionStrength: CGFloat = 1_200
@@ -323,7 +322,9 @@ enum KnowledgeGraphLayout {
         let damping: CGFloat = 0.8
 
         for _ in 0..<iterations {
-            var forces: [UUID: CGVector] = Dictionary(uniqueKeysWithValues: concepts.map { ($0.id, .zero) })
+            var forces: [UUID: CGVector] = concepts.reduce(into: [UUID: CGVector]()) { result, concept in
+                result[concept.id] = .zero
+            }
 
             for i in concepts.indices {
                 for j in concepts.indices where i != j {

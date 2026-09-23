@@ -1,0 +1,33 @@
+{
+  "concepts": [
+    "Cell",
+    "DNA",
+    "Gene",
+    "Protein",
+    "Evolution",
+    "Natural Selection",
+    "Ecosystem"
+  ],
+  "relationships": [
+    {
+      "source": "DNA",
+      "relationship": "encodes",
+      "target": "Protein"
+    },
+    {
+      "source": "Natural Selection",
+      "relationship": "drives",
+      "target": "Evolution"
+    },
+    {
+      "source": "Organism",
+      "relationship": "lives_in",
+      "target": "Ecosystem"
+    }
+  ],
+  "facts": [
+    "DNA stores genetic information.",
+    "Proteins perform many cellular functions.",
+    "Natural selection contributes to evolution."
+  ]
+}

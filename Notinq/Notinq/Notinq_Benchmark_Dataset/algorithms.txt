@@ -1,0 +1,7 @@
+[00:00] Professor: Today we discuss algorithms.
+[02:00] Professor: Key concepts include Algorithm, Complexity, Sorting, Graph, Dynamic Programming, Greedy Method.
+[05:00] Professor: Complexity evaluates Algorithm.
+[05:00] Professor: Dynamic Programming solves Optimization Problem.
+[05:00] Professor: Greedy Method makes Local Choice.
+[08:00] Professor: Algorithms solve computational problems.
+[08:00] Professor: Complexity is often measured using Big O notation.

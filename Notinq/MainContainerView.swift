@@ -6,12 +6,12 @@
 //
 
 import SwiftUI
-import SwiftData
 import AppKit
 
 struct MainContainerView: View {
 
     @ObservedObject var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var studyPanelWidth: CGFloat = 410
 
     // Panel widths
@@ -22,6 +22,7 @@ struct MainContainerView: View {
     @State private var listLastDragX: CGFloat?
     @State private var isSidebarCollapsed = false
     @State private var isNotesCollapsed = false
+    @StateObject private var onboardingViewModel = OnboardingViewModel()
 
     init(appState: AppState) {
         self.appState = appState
@@ -166,11 +167,18 @@ struct MainContainerView: View {
                                 }
                             case .ai:
                                 AIWorkspaceView(
+                                    noteID: currentNoteID,
                                     noteTitle: currentNoteTitle,
                                     noteText: currentNoteText,
                                     lastUpdatedAt: currentNoteUpdatedAt
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            case .dashboard:
+                                LearningDashboardView()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            case .graph:
+                                KnowledgeGraphExplorerView()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             case .search:
                                 SearchView()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -180,7 +188,7 @@ struct MainContainerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .background(Color.bgEditor)
                         .shadow(color: .black.opacity(0.045), radius: 22, x: -10, y: 0)
-                        .animation(.easeInOut(duration: 0.15), value: appState.selectedMode)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: appState.selectedMode)
                         .overlay(alignment: .trailing) {
                             if appState.isLearningInsightsOpen, let currentNoteID {
                                 Color.black.opacity(0.18)
@@ -231,6 +239,12 @@ struct MainContainerView: View {
                         .zIndex(10)
                 }
 
+                if !onboardingViewModel.isCompleted {
+                    OnboardingView(viewModel: onboardingViewModel)
+                        .transition(.opacity)
+                        .zIndex(30)
+                }
+
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .background(Color.bgPrimary)
@@ -253,7 +267,12 @@ struct MainContainerView: View {
             content: currentNoteText,
             updatedAt: currentNoteUpdatedAt ?? Date()
         )
-        KnowledgeGraphManager.shared.generateGraph(note: note)
+        KnowledgeService.shared.ingest(note: KnowledgeIngestionRequest(
+            noteID: note.id,
+            title: note.title,
+            content: note.content,
+            updatedAt: note.updatedAt
+        ))
     }
 
     static func learningInsightsPanelSize(for editorSize: CGSize) -> CGSize {
@@ -374,7 +393,10 @@ struct MainContainerView: View {
 
     private func markFlashcardReviewed(_ card: StudyFlashcard) {
         guard let currentNoteID else { return }
-        let concept = inferConcept(from: card.front) ?? inferConcept(from: card.back) ?? card.type.title
+        let conceptCandidates = card.conceptIDs.isEmpty
+            ? [inferConcept(from: card.front), inferConcept(from: card.back), card.type.title].compactMap { $0 }
+            : card.conceptIDs
+        let concept = conceptCandidates.first ?? inferConcept(from: card.front) ?? inferConcept(from: card.back) ?? card.type.title
         appState.mutateStudyData(for: currentNoteID) { studyData in
             studyData.progress.flashcardsReviewed += 1
             if let index = studyData.learningMemory.firstIndex(where: { normalizedStudyConceptKey($0.concept) == normalizedStudyConceptKey(concept) }) {
@@ -399,6 +421,9 @@ struct MainContainerView: View {
             studyData.streaks.lastStudiedAt = Date()
             studyData.lastGeneratedAt = Date()
         }
+        for conceptID in conceptCandidates {
+            StudyService.shared.recordReviewEvent(conceptID: conceptID, noteID: currentNoteID, score: 1.0, kind: "flashcard")
+        }
     }
 
     private func recordQuizAttempt(quizSet: StudyQuizSet, score: Int, totalQuestions: Int) {
@@ -420,6 +445,15 @@ struct MainContainerView: View {
             studyData.streaks.studySessions += 1
             studyData.streaks.lastStudiedAt = Date()
             studyData.lastGeneratedAt = Date()
+        }
+        let normalizedScore = min(1.0, max(0.0, percentage / 100.0))
+        for question in quizSet.questions {
+            let conceptIDs = question.conceptIDs.isEmpty
+                ? [inferConcept(from: question.prompt), inferConcept(from: question.correctAnswer)].compactMap { $0 }
+                : question.conceptIDs
+            for conceptID in conceptIDs {
+                StudyService.shared.recordReviewEvent(conceptID: conceptID, noteID: currentNoteID, score: normalizedScore, kind: "question")
+            }
         }
     }
 

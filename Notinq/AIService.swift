@@ -48,6 +48,7 @@ enum AIRequestKind {
     case noteCompletenessAnalysis
     case knowledgeGraphExtraction
     case followUp
+    case editorProposal
 
     var maxTokens: Int32 {
         let cap = AIRuntimeConfig.current.llama.maxTokens
@@ -84,22 +85,53 @@ enum AIRequestKind {
             return min(max(cap, 768), 960)
         case .followUp:
             return min(cap, 300)
+        case .editorProposal:
+            return min(cap, 420)
         }
     }
 }
 
 final class AIService {
     static let shared = AIService()
-    private let router = AIRouter()
+
+    private let inferenceEngine = InferenceEngine.shared
+    private let adaptiveTutorService = AdaptiveTutorService.shared
+
+    struct CitedTutorResponse {
+        let response: PromptTutorResponse
+        let context: KnowledgeContext
+        let adaptiveContext: AdaptiveTutorContext?
+
+        var citations: [PromptTutorCitation] {
+            if let responseCitations = response.citations, responseCitations.isEmpty == false {
+                return responseCitations
+            }
+            return context.tutorContext.citations.map { $0.asTutorCitation }
+        }
+    }
 
     func run(prompt: String, contextLength: Int, completion: @escaping (String) -> Void) {
-        let provider = router.route(contextLength: contextLength)
-        provider.run(prompt: prompt, completion: completion)
+        run(prompt: prompt, contextLength: contextLength, kind: .ask, completion: completion)
     }
 
     func run(prompt: String, contextLength: Int, kind: AIRequestKind, completion: @escaping (String) -> Void) {
-        let provider = router.route(contextLength: contextLength)
-        provider.run(prompt: prompt, maxTokens: kind.maxTokens, completion: completion)
+        let request = AIGenerationRequest(
+            prompt: prompt,
+            systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+            maxTokens: kind.maxTokens,
+            temperature: 0.5,
+            topP: 0.92,
+            responseFormat: .text,
+            contextLimit: contextLength,
+            metadata: ["requestKind": "\(kind)"]
+        )
+
+        Task {
+            let response = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            await MainActor.run {
+                completion(response)
+            }
+        }
     }
 
     func runStreaming(
@@ -108,13 +140,7 @@ final class AIService {
         onToken: @escaping (String) -> Void,
         completion: @escaping () -> Void
     ) {
-        runStreaming(
-            prompt: prompt,
-            contextLength: contextLength,
-            kind: .followUp,
-            onToken: onToken,
-            completion: completion
-        )
+        runStreaming(prompt: prompt, contextLength: contextLength, kind: .followUp, onToken: onToken, completion: completion)
     }
 
     func runStreaming(
@@ -124,11 +150,525 @@ final class AIService {
         onToken: @escaping (String) -> Void,
         completion: @escaping () -> Void
     ) {
-        let provider = router.route(contextLength: contextLength)
-        provider.runStreaming(prompt: prompt, maxTokens: kind.maxTokens, onToken: onToken, completion: completion)
+        let request = AIGenerationRequest(
+            prompt: prompt,
+            systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+            maxTokens: kind.maxTokens,
+            temperature: 0.45,
+            topP: 0.92,
+            responseFormat: .text,
+            contextLimit: contextLength,
+            metadata: ["requestKind": "\(kind)"]
+        )
+
+        Task {
+            _ = try? await inferenceEngine.stream(request, onToken: onToken)
+            await MainActor.run {
+                completion()
+            }
+        }
     }
 
     func cancelGeneration() {
-        AIModelManager.shared.currentLlamaContext()?.cancelGeneration()
+        inferenceEngine.cancel()
+    }
+
+    func directEdit(
+        action: AIAction,
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID? = nil,
+        completion: @escaping (String) -> Void
+    ) {
+        Task {
+            let query = [
+                action.promptInstruction(),
+                selectedText,
+                String(noteContext.prefix(1_200))
+            ].joined(separator: "\n\n")
+            let response = await adaptiveTextResponse(
+                question: query,
+                noteID: noteID,
+                requestKind: "adaptiveDirectEdit",
+                maxTokens: AIRequestKind.explain.maxTokens
+            )
+            await MainActor.run {
+                completion(response)
+            }
+        }
+    }
+
+    @discardableResult
+    func editorProposal(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID? = nil,
+        completion: @escaping (AIProposalGenerationResult) -> Void
+    ) -> Task<Void, Never> {
+        Task {
+            if action == .dontUnderstand {
+                let response = await sourceBackedAdaptiveProposalResponse(
+                    selectedText: selectedText,
+                    noteContext: noteContext,
+                    noteID: noteID,
+                    requestKind: "editorProposal.\(action.rawValue)",
+                    maxTokens: AIRequestKind.editorProposal.maxTokens
+                )
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    completion(response)
+                }
+                return
+            }
+
+            let prompt = Self.editorProposalPrompt(
+                action: action,
+                selectedText: selectedText,
+                noteContext: noteContext
+            )
+            let response = await adaptiveTextResponseWithContext(
+                question: prompt,
+                noteID: noteID,
+                requestKind: "editorProposal.\(action.rawValue)",
+                maxTokens: AIRequestKind.editorProposal.maxTokens
+            )
+            let adaptiveContext = response.context.map(AdaptiveExplanationContext.fromTutorContext)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                completion(
+                    AIProposalGenerationResult(
+                        generatedText: response.text,
+                        adaptiveExplanationContext: action == .dontUnderstand ? adaptiveContext : nil
+                    )
+                )
+            }
+        }
+    }
+
+    static func editorProposalPrompt(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String
+    ) -> String {
+        AIActionPromptBuilder().prompt(
+            action: action,
+            selectedText: selectedText,
+            noteContext: noteContext
+        )
+    }
+
+    static func editorProposalPrompt(
+        action: AIEditorAction,
+        selectedText: String,
+        noteContext: String,
+        adaptiveContext: AdaptiveExplanationContext?
+    ) -> String {
+        AIActionPromptBuilder().prompt(
+            action: action,
+            selectedText: selectedText,
+            noteContext: noteContext,
+            adaptiveContext: adaptiveContext
+        )
+    }
+
+    func streamFollowUp(
+        noteContext: String,
+        followUpTitle: String,
+        blockContent: String,
+        onToken: @escaping (String) -> Void,
+        completion: @escaping () -> Void
+    ) {
+        Task {
+            let query = [
+                "\(followUpTitle) the following generated passage while preserving the note's context.",
+                blockContent,
+                String(noteContext.prefix(1_200))
+            ].joined(separator: "\n\n")
+            let request = await adaptiveRequest(
+                question: query,
+                noteID: nil,
+                requestKind: "adaptiveFollowUp",
+                maxTokens: AIRequestKind.followUp.maxTokens
+            )
+            _ = try? await inferenceEngine.stream(request, onToken: onToken)
+            await MainActor.run {
+                completion()
+            }
+        }
+    }
+
+    func chat(noteTitle: String, noteText: String, userRequest: String, completion: @escaping (String) -> Void) {
+        Task {
+            let query = [userRequest, noteTitle, String(noteText.prefix(1_200))].joined(separator: "\n\n")
+            let response = await adaptiveTextResponse(
+                question: query,
+                noteID: nil,
+                requestKind: "adaptiveChat",
+                maxTokens: AIRequestKind.ask.maxTokens
+            )
+            await MainActor.run {
+                completion(response)
+            }
+        }
+    }
+
+    func citedTutorResponse(
+        noteID: UUID?,
+        noteTitle: String,
+        noteText: String,
+        userRequest: String,
+        completion: @escaping (CitedTutorResponse) -> Void
+    ) {
+        let knowledgeContext = KnowledgeService.shared.buildContext(noteID: noteID, title: noteTitle, text: noteText)
+        let snapshot = knowledgeContext.studySnapshotRepresentation()
+        let promptContext = PromptBuildContext(
+            noteTitle: noteTitle,
+            noteText: truncate(noteText, limit: 4_000),
+            structuredKnowledge: snapshot.structuredKnowledgeRepresentation(),
+            knowledgeSnapshot: snapshot,
+            tutorContext: knowledgeContext.tutorContext,
+            selectedText: nil,
+            userRequest: userRequest,
+            providerKind: ModelManager.shared.currentModelDiagnostics().providerKind,
+            modelIdentifier: ModelManager.shared.activeModelIDDescription(),
+            noteSignature: noteID?.uuidString,
+            contextLimit: Int(AIRuntimeConfig.current.llama.contextSize)
+        )
+        let input = PromptTutorInput(noteTitle: noteTitle, knowledge: snapshot, question: userRequest)
+
+        Task {
+            do {
+                let adaptiveContext = try await adaptiveTutorService.buildContext(
+                    question: [userRequest, noteTitle, String(noteText.prefix(1_200))].joined(separator: "\n\n"),
+                    noteID: noteID
+                )
+                let request = adaptiveTutorService.request(
+                    for: adaptiveContext,
+                    requestKind: "adaptiveCitedTutor",
+                    maxTokens: AIRequestKind.ask.maxTokens
+                )
+                let answer = try await inferenceEngine.generate(request).text
+                let response = PromptTutorResponse(
+                    answer: answer,
+                    keyPoints: adaptiveContext.relevantConcepts.prefix(5).map(\.name),
+                    followUpQuestions: adaptiveContext.missingPrerequisites.prefix(3).map { "Review \($0.name) next?" },
+                    confidence: adaptiveContext.relevantConcepts.isEmpty ? 0.55 : 0.75,
+                    citations: nil
+                )
+                await MainActor.run {
+                    completion(CitedTutorResponse(response: response, context: knowledgeContext, adaptiveContext: adaptiveContext))
+                }
+            } catch {
+                do {
+                    let execution = try await PromptRegistry.shared.execute(TutorPrompt.self, input: input, context: promptContext)
+                    await MainActor.run {
+                        completion(CitedTutorResponse(response: execution.output, context: knowledgeContext, adaptiveContext: nil))
+                    }
+                } catch {
+                    chat(noteTitle: noteTitle, noteText: noteText, userRequest: userRequest) { responseText in
+                        let fallback = PromptTutorResponse(
+                            answer: responseText,
+                            keyPoints: [],
+                            followUpQuestions: [],
+                            confidence: 0.5,
+                            citations: nil
+                        )
+                        completion(CitedTutorResponse(response: fallback, context: knowledgeContext, adaptiveContext: nil))
+                    }
+                }
+            }
+        }
+    }
+
+    func extractStructuredKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StructuredKnowledge {
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await extractStructuredKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func extractStructuredKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StructuredKnowledge {
+        await LearningEngine.shared.extractStructuredKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func extractKnowledge(noteTitle: String, noteText: String, notebookText: String = "") async -> StudyKnowledgeSnapshot {
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await extractKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func extractKnowledge(from structure: DocumentStructure, notebookText: String = "") async -> StudyKnowledgeSnapshot {
+        await LearningEngine.shared.extractKnowledge(from: structure, notebookText: notebookText)
+    }
+
+    func inspectKnowledgeExtraction(noteTitle: String, noteText: String, notebookText: String = "") async -> KnowledgeExtractionDebugReport {
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await inspectKnowledgeExtraction(from: structure, notebookText: notebookText)
+    }
+
+    func inspectKnowledgeExtraction(from structure: DocumentStructure, notebookText: String = "") async -> KnowledgeExtractionDebugReport {
+        await KnowledgeExtractionEngine.shared.inspectExtraction(from: structure, notebookText: notebookText)
+    }
+
+    func generateStudyData(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String = "",
+        existingStudyData: NoteStudyData
+    ) async -> NoteStudyData {
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await generateStudyData(from: structure, notebookText: notebookText, existingStudyData: existingStudyData)
+    }
+
+    func generateStudyData(
+        from structure: DocumentStructure,
+        notebookText: String = "",
+        existingStudyData: NoteStudyData
+    ) async -> NoteStudyData {
+        let adaptiveStudyData = await adaptiveStudySeed(
+            title: structure.title,
+            text: structure.normalizedText,
+            existingStudyData: existingStudyData
+        )
+        let knowledge = await extractStructuredKnowledge(from: structure, notebookText: notebookText)
+        return LearningEngine.shared.generateStudyData(from: knowledge, existingStudyData: adaptiveStudyData)
+    }
+
+    func generateStudyData(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String = ""
+    ) async -> NoteStudyData {
+        let structure = DocumentPreprocessor.shared.preprocess(title: noteTitle, text: noteText)
+        return await generateStudyData(from: structure, notebookText: notebookText, existingStudyData: NoteStudyData())
+    }
+
+    private func truncate(_ text: String, limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit)) + "\n[Context truncated]"
+    }
+
+    private func adaptiveTextResponse(
+        question: String,
+        noteID: UUID?,
+        requestKind: String,
+        maxTokens: Int32
+    ) async -> String {
+        let request = await adaptiveRequest(
+            question: question,
+            noteID: noteID,
+            requestKind: requestKind,
+            maxTokens: maxTokens
+        )
+        return (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+    }
+
+    private func adaptiveTextResponseWithContext(
+        question: String,
+        noteID: UUID?,
+        requestKind: String,
+        maxTokens: Int32
+    ) async -> (text: String, context: AdaptiveTutorContext?) {
+        do {
+            let context = try await adaptiveTutorService.buildContext(question: question, noteID: noteID)
+            let request = adaptiveTutorService.request(for: context, requestKind: requestKind, maxTokens: maxTokens)
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return (text, context)
+        } catch {
+            let request = AIGenerationRequest(
+                prompt: question,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.92,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: ["requestKind": requestKind, "graphAware": "false"]
+            )
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return (text, nil)
+        }
+    }
+
+    private func sourceBackedAdaptiveProposalResponse(
+        selectedText: String,
+        noteContext: String,
+        noteID: UUID?,
+        requestKind: String,
+        maxTokens: Int32
+    ) async -> AIProposalGenerationResult {
+        do {
+            let seedPrompt = Self.editorProposalPrompt(
+                action: .dontUnderstand,
+                selectedText: selectedText,
+                noteContext: noteContext
+            )
+            let context = try await adaptiveTutorService.buildContext(question: seedPrompt, noteID: noteID)
+            var adaptiveContext = AdaptiveExplanationContext.fromTutorContext(context)
+            adaptiveContext.selectedText = selectedText
+            let profiles = ConceptLearningProfileBuilder().profiles(
+                for: adaptiveContext.conceptIDs,
+                signals: LearningSignalStore.shared.allSignals()
+            )
+            adaptiveContext.applyLearningProfiles(
+                Array(profiles.values),
+                conceptNameByID: Self.conceptNameByID(from: context)
+            )
+            let groundedPrompt = Self.editorProposalPrompt(
+                action: .dontUnderstand,
+                selectedText: selectedText,
+                noteContext: noteContext,
+                adaptiveContext: adaptiveContext
+            )
+            let request = AIGenerationRequest(
+                prompt: groundedPrompt,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.9,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: [
+                    "requestKind": requestKind,
+                    "graphAware": "true",
+                    "sourceBacked": adaptiveContext.hasSourceGrounding ? "true" : "false",
+                    "adaptiveContextSources": "\(adaptiveContext.retrievedNoteSources.count)"
+                ]
+            )
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return AIProposalGenerationResult(
+                generatedText: text,
+                adaptiveExplanationContext: adaptiveContext
+            )
+        } catch {
+            let fallbackContext = AdaptiveExplanationContext.unavailable()
+            let prompt = Self.editorProposalPrompt(
+                action: .dontUnderstand,
+                selectedText: selectedText,
+                noteContext: noteContext,
+                adaptiveContext: fallbackContext
+            )
+            let request = AIGenerationRequest(
+                prompt: prompt,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.9,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: [
+                    "requestKind": requestKind,
+                    "graphAware": "false",
+                    "sourceBacked": "false"
+                ]
+            )
+            let text = (try? await inferenceEngine.generate(request))?.text ?? "Unable to generate response."
+            return AIProposalGenerationResult(
+                generatedText: text,
+                adaptiveExplanationContext: fallbackContext
+            )
+        }
+    }
+
+    private static func conceptNameByID(from context: AdaptiveTutorContext) -> [String: String] {
+        var names: [String: String] = [:]
+        let concepts = context.weakConcepts
+            + context.strongConcepts
+            + context.missingPrerequisites
+            + context.knowledgeGaps
+            + context.relevantConcepts
+            + context.relatedConcepts
+        for concept in concepts {
+            names[concept.id.uuidString] = concept.name
+        }
+        return names
+    }
+
+    private func adaptiveRequest(
+        question: String,
+        noteID: UUID?,
+        requestKind: String,
+        maxTokens: Int32
+    ) async -> AIGenerationRequest {
+        do {
+            let context = try await adaptiveTutorService.buildContext(question: question, noteID: noteID)
+            return adaptiveTutorService.request(for: context, requestKind: requestKind, maxTokens: maxTokens)
+        } catch {
+            return AIGenerationRequest(
+                prompt: question,
+                systemPrompt: PromptRegistry.shared.definition(for: .assistantChat).systemPrompt,
+                maxTokens: maxTokens,
+                temperature: 0.45,
+                topP: 0.92,
+                responseFormat: .text,
+                contextLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+                metadata: ["requestKind": requestKind, "graphAware": "false"]
+            )
+        }
+    }
+
+    private func adaptiveStudySeed(
+        title: String,
+        text: String,
+        existingStudyData: NoteStudyData
+    ) async -> NoteStudyData {
+        do {
+            let query = ["Generate study materials.", title, String(text.prefix(1_500))].joined(separator: "\n\n")
+            let context = try await adaptiveTutorService.buildContext(question: query, noteID: nil)
+            var seeded = existingStudyData
+            let weakNames = Set((context.weakConcepts + context.knowledgeGaps + context.missingPrerequisites).map(\.name))
+            let strongNames = Set(context.strongConcepts.map(\.name))
+            let adaptiveEntries = context.relevantConcepts.prefix(20).map { concept -> StudyMemoryEntry in
+                let name = concept.name
+                if weakNames.contains(name) {
+                    return StudyMemoryEntry(concept: name, masteredCount: 0, missedCount: 1, reviewHistory: [], lastReviewedAt: nil, lastOutcome: .incorrect)
+                }
+                if strongNames.contains(name) {
+                    return StudyMemoryEntry(concept: name, masteredCount: 1, missedCount: 0, reviewHistory: [], lastReviewedAt: nil, lastOutcome: .correct)
+                }
+                return StudyMemoryEntry(concept: name, masteredCount: 0, missedCount: 0, reviewHistory: [], lastReviewedAt: nil, lastOutcome: .almost)
+            }
+            seeded.learningMemory = mergeStudyMemory(existing: seeded.learningMemory, adaptive: adaptiveEntries)
+            return seeded
+        } catch {
+            return existingStudyData
+        }
+    }
+
+    private func mergeStudyMemory(existing: [StudyMemoryEntry], adaptive: [StudyMemoryEntry]) -> [StudyMemoryEntry] {
+        var byConcept = Dictionary(existing.map { ($0.concept, $0) }, uniquingKeysWith: { first, _ in first })
+        for entry in adaptive where byConcept[entry.concept] == nil {
+            byConcept[entry.concept] = entry
+        }
+        return byConcept.values.sorted { $0.concept.localizedCaseInsensitiveCompare($1.concept) == .orderedAscending }
+    }
+}
+
+private extension AIAction {
+    func promptInstruction() -> String {
+        switch self {
+        case .summarize:
+            return "Summarize the selected text into a study-ready overview."
+        case .simplify:
+            return "Rewrite the selected text in simpler language without losing meaning."
+        case .rewrite:
+            return "Rewrite the selected text for clarity and flow while preserving every fact."
+        case .explain:
+            return "Explain the selected text in plain language. Include prerequisite concepts and weak areas when the adaptive context identifies them."
+        case .add:
+            return "Continue the selected text naturally with a few helpful sentences."
+        case .ask:
+            return "Answer the user's question using the note context."
+        }
+    }
+}
+
+private extension CitationReference {
+    var asTutorCitation: PromptTutorCitation {
+        PromptTutorCitation(
+            sourceType: sourceType.rawValue,
+            sourceID: sourceID,
+            noteTitle: noteTitle,
+            conceptName: conceptName,
+            snippet: snippet
+        )
     }
 }

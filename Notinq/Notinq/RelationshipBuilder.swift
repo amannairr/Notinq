@@ -10,25 +10,6 @@ enum RelationshipBuilder {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func aliasMatch(_ lhs: ConceptRegistryEntry, candidateName: String, candidateAliases: [String]) -> Bool {
-        let normalizedCandidate = normalizedKey(for: candidateName)
-        guard !normalizedCandidate.isEmpty else { return false }
-
-        if normalizedKey(for: lhs.name) == normalizedCandidate {
-            return true
-        }
-
-        if lhs.aliases.contains(where: { normalizedKey(for: $0) == normalizedCandidate }) {
-            return true
-        }
-
-        if candidateAliases.contains(where: { normalizedKey(for: $0) == normalizedKey(for: lhs.name) }) {
-            return true
-        }
-
-        return false
-    }
-
     static func semanticSimilarityPlaceholder(lhs: String, rhs: String) -> Double {
         let left = normalizedKey(for: lhs)
         let right = normalizedKey(for: rhs)
@@ -68,4 +49,3 @@ enum RelationshipBuilder {
         max(1, min(5, Int((1.0 - semanticSimilarityPlaceholder(lhs: text, rhs: text)) * 5.0)))
     }
 }
-

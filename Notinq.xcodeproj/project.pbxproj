@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		071AAE80301E0DF40076E7B7 /* PromptTextAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */; };
+		071AAE84301E10B20076E7B7 /* SemanticChunker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE83301E10B20076E7B7 /* SemanticChunker.swift */; };
+		071AAE86301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */; };
 		07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */; };
 		07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462872FA64859009B2513 /* WhisperBridge.mm */; };
 		07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07B462892FA648A8009B2513 /* AudioStreamManager.swift */; };
@@ -20,7 +23,6 @@
 		07B462AC2FA77B6E009B2513 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AB2FA77B6E009B2513 /* Metal.framework */; };
 		07B462AE2FA77B79009B2513 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AD2FA77B79009B2513 /* MetalKit.framework */; };
 		07B462B02FA77B87009B2513 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AF2FA77B87009B2513 /* Accelerate.framework */; };
-		07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */ = {isa = PBXBuildFile; fileRef = 07B462B12FA77BDB009B2513 /* ggml-base.en.bin */; };
 		07B462BB2FA7A2F6009B2513 /* LlamaBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */; };
 		07F7A0012FB8000100AA1001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07F7A0002FB8000100AA1001 /* XCTest.framework */; };
 		8A1D01012FB1000200AA1001 /* libllama.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A1D01022FB1000200AA1001 /* libllama.a */; };
@@ -44,9 +46,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTextAssets.swift; sourceTree = "<group>"; };
+		071AAE83301E10B20076E7B7 /* SemanticChunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticChunker.swift; sourceTree = "<group>"; };
+		071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeExtractionDebuggerView.swift; sourceTree = "<group>"; };
 		07279D8B2F8AA40300A1D363 /* Notinq.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notinq.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279D9A2F8AA40400A1D363 /* NotinqTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		07279DA42F8AA40400A1D363 /* NotinqUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotinqUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0774B93F304C8F0B006E2D58 /* Qwen3-4B-Q4_K_M.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Qwen3-4B-Q4_K_M.gguf"; sourceTree = "<group>"; };
 		07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyResponseParser.swift; sourceTree = "<group>"; };
 		07B462862FA64859009B2513 /* WhisperBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WhisperBridge.h; sourceTree = "<group>"; };
 		07B462872FA64859009B2513 /* WhisperBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WhisperBridge.mm; sourceTree = "<group>"; };
@@ -61,7 +67,6 @@
 		07B462AB2FA77B6E009B2513 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		07B462AD2FA77B79009B2513 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		07B462AF2FA77B87009B2513 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
-		07B462B12FA77BDB009B2513 /* ggml-base.en.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; name = "ggml-base.en.bin"; path = "../../../models/ggml-base.en.bin"; sourceTree = "<group>"; };
 		07B462B92FA7A2F6009B2513 /* LlamaBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LlamaBridge.h; sourceTree = "<group>"; };
 		07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LlamaBridge.mm; sourceTree = "<group>"; };
 		07F7A0002FB8000100AA1001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
@@ -69,10 +74,43 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		075A89EE303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notinq/Notinq_Benchmark_Dataset/algorithms_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/algorithms.txt,
+				Notinq/Notinq_Benchmark_Dataset/biology_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/biology.txt,
+				Notinq/Notinq_Benchmark_Dataset/databases_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/databases.txt,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning.txt,
+				Notinq/Notinq_Benchmark_Dataset/statistics_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/statistics.txt,
+			);
+			target = 07279D992F8AA40400A1D363 /* NotinqTests */;
+		};
+		075A89EF303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqUITests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notinq/Notinq_Benchmark_Dataset/algorithms_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/algorithms.txt,
+				Notinq/Notinq_Benchmark_Dataset/biology_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/biology.txt,
+				Notinq/Notinq_Benchmark_Dataset/databases_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/databases.txt,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/machine_learning.txt,
+				Notinq/Notinq_Benchmark_Dataset/statistics_ground_truth.json,
+				Notinq/Notinq_Benchmark_Dataset/statistics.txt,
+			);
+			target = 07279DA32F8AA40400A1D363 /* NotinqUITests */;
+		};
 		07B462752FA4F9BE009B2513 /* Exceptions for "Notinq" folder in "Notinq" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"Resources/ggml-metal.metal",
 			);
 			target = 07279D8A2F8AA40300A1D363 /* Notinq */;
 		};
@@ -83,6 +121,8 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				07B462752FA4F9BE009B2513 /* Exceptions for "Notinq" folder in "Notinq" target */,
+				075A89EE303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqTests" target */,
+				075A89EF303B5327002B0AC8 /* Exceptions for "Notinq" folder in "NotinqUITests" target */,
 			);
 			path = Notinq;
 			sourceTree = "<group>";
@@ -160,6 +200,10 @@
 				07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */,
 				07ABBDC02FDA5191002EE210 /* StudyResponseParser.swift */,
 				070667C7300C1BBF002CE5C1 /* Recovered References */,
+				071AAE7F301E0DF40076E7B7 /* PromptTextAssets.swift */,
+				071AAE83301E10B20076E7B7 /* SemanticChunker.swift */,
+				071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */,
+				079DD65D3059C64E008A107D /* Views */,
 			);
 			sourceTree = "<group>";
 		};
@@ -173,10 +217,25 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		079DD65D3059C64E008A107D /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				079DD65E3059C651008A107D /* Graph */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		079DD65E3059C651008A107D /* Graph */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Graph;
+			sourceTree = "<group>";
+		};
 		07B462932FA760E6009B2513 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				07B462B12FA77BDB009B2513 /* ggml-base.en.bin */,
+				0774B93F304C8F0B006E2D58 /* Qwen3-4B-Q4_K_M.gguf */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -316,7 +375,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				07B462B22FA77BDB009B2513 /* ggml-base.en.bin in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -346,8 +404,11 @@
 				07B4628C2FA648A8009B2513 /* TranscriptionEngine.swift in Sources */,
 				07B4628A2FA648A8009B2513 /* AudioStreamManager.swift in Sources */,
 				07B462882FA64859009B2513 /* WhisperBridge.mm in Sources */,
+				071AAE86301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift in Sources */,
 				07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */,
 				07B462902FA648A8009B2513 /* WhisperManager.swift in Sources */,
+				071AAE80301E0DF40076E7B7 /* PromptTextAssets.swift in Sources */,
+				071AAE84301E10B20076E7B7 /* SemanticChunker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

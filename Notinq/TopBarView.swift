@@ -22,15 +22,6 @@ struct TopBarView: View {
 
             HStack(spacing: 8) {
 
-                TopBarButton(icon: "plus", label: "New Note") {
-                    // TODO: Wire up note creation action.
-                }
-                TopBarButton(icon: "square.and.arrow.up", label: "Share") {
-                    // TODO: Wire up share action.
-                }
-
-                Divider().frame(height: 14)
-
                 TopBarButton(icon: "sparkles", label: "AI Command Bar") {
                     showCommandBar.toggle()
                 }

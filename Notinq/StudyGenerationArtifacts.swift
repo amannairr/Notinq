@@ -80,6 +80,79 @@ struct StudyContentAnalysis: Codable, Equatable, Sendable {
     var wordCount: Int = 0
 }
 
+enum StudyKnowledgeDifficulty: String, Codable, CaseIterable, Sendable {
+    case intro
+    case intermediate
+    case advanced
+}
+
+struct StudyKnowledgeItem: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var title: String
+    var summary: String
+    var evidence: [String] = []
+    var importance: Double = 0
+    var difficulty: Double = 0.5
+    var aliases: [String] = []
+    var relatedTitles: [String] = []
+    var category: String = ""
+}
+
+struct StudyKnowledgeRelationship: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var sourceTitle: String
+    var targetTitle: String
+    var relation: String
+    var confidence: Double = 0.5
+}
+
+struct StudyKnowledgeNode: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var title: String
+    var summary: String = ""
+    var children: [StudyKnowledgeNode] = []
+}
+
+struct StudyKnowledgeSnapshot: Codable, Equatable, Sendable {
+    var title: String = ""
+    var sourceSignature: String = ""
+    var cleanedText: String = ""
+    var normalizedText: String = ""
+    var topics: [String] = []
+    var concepts: [StudyKnowledgeItem] = []
+    var definitions: [StudyKnowledgeItem] = []
+    var relationships: [StudyKnowledgeRelationship] = []
+    var examples: [StudyKnowledgeItem] = []
+    var procedures: [StudyKnowledgeItem] = []
+    var formulas: [StudyKnowledgeItem] = []
+    var importantFacts: [StudyKnowledgeItem] = []
+    var keyTerms: [StudyKnowledgeItem] = []
+    var misconceptions: [StudyKnowledgeItem] = []
+    var prerequisites: [StudyKnowledgeItem] = []
+    var hierarchy: [StudyKnowledgeNode] = []
+    var difficulty: StudyKnowledgeDifficulty = .intermediate
+    var supportingExamples: [StudyKnowledgeItem] = []
+    var supportingEvidence: [String] = []
+    var summaryHighlights: [String] = []
+    var examFocus: [String] = []
+    var tokenEstimate: Int = 0
+    var extractionStrategy: String = ""
+
+    var hasContent: Bool {
+        !cleanedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !concepts.isEmpty
+            || !definitions.isEmpty
+            || !relationships.isEmpty
+            || !examples.isEmpty
+            || !procedures.isEmpty
+            || !formulas.isEmpty
+            || !importantFacts.isEmpty
+            || !keyTerms.isEmpty
+            || !misconceptions.isEmpty
+            || !prerequisites.isEmpty
+    }
+}
+
 struct StudyGenerationArtifacts: Codable, Equatable, Sendable {
     var flashcards: [StudyFlashcard] = []
     var quizQuestions: [StudyQuizQuestion] = []
@@ -88,6 +161,8 @@ struct StudyGenerationArtifacts: Codable, Equatable, Sendable {
     var analysis: StudyContentAnalysis = StudyContentAnalysis()
     var source: StudyGenerationSource = .basic
     var artifacts: [StudyArtifact] = []
+    var knowledgeSnapshot: StudyKnowledgeSnapshot = StudyKnowledgeSnapshot()
+    var knowledgeSignature: String = ""
 
     var hasAnyContent: Bool {
         !flashcards.isEmpty

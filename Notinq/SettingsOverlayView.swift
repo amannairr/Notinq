@@ -4,35 +4,50 @@ struct SettingsOverlayView: View {
     @EnvironmentObject private var appState: AppState
     @State private var authErrorMessage: String?
     @State private var modelPathSummary: String = AIModelManager.shared.currentModelPathDescription()
+    #if DEBUG
+    @State private var isShowingAIEvaluation = false
+    @State private var isShowingLocalAIPlayground = false
+    #endif
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.25)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    appState.isSettingsOpen = false
-                }
+        NavigationStack {
+            ZStack {
+                Color.black.opacity(0.25)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        appState.isSettingsOpen = false
+                    }
 
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                aiSettingsSection
-                privacySection
-                voiceSection
-                accountSection
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    aiSettingsSection
+                    privacySection
+                    voiceSection
+                    accountSection
+                    debugSection
+                }
+                .padding(24)
+                .frame(width: 460)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white)
+                )
+                .shadow(color: Color.black.opacity(0.14), radius: 26, x: 0, y: 14)
             }
-            .padding(24)
-            .frame(width: 460)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white)
-            )
-            .shadow(color: Color.black.opacity(0.14), radius: 26, x: 0, y: 14)
-        }
-        .onAppear {
-            modelPathSummary = AIModelManager.shared.currentModelPathDescription()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .notinqLocalModelDidChange)) { _ in
-            modelPathSummary = AIModelManager.shared.currentModelPathDescription()
+            .onAppear {
+                modelPathSummary = AIModelManager.shared.currentModelPathDescription()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .notinqLocalModelDidChange)) { _ in
+                modelPathSummary = AIModelManager.shared.currentModelPathDescription()
+            }
+            #if DEBUG
+            .sheet(isPresented: $isShowingAIEvaluation) {
+                AIEvaluationView()
+            }
+            .sheet(isPresented: $isShowingLocalAIPlayground) {
+                LocalAIPlaygroundView()
+            }
+            #endif
         }
     }
 
@@ -160,6 +175,31 @@ struct SettingsOverlayView: View {
             }
         }
     }
+
+    #if DEBUG
+    private var debugSection: some View {
+        section("Developer") {
+            Button("Open AI Evaluation") {
+                isShowingAIEvaluation = true
+            }
+            .buttonStyle(.bordered)
+
+            Button("Open Local AI Playground") {
+                isShowingLocalAIPlayground = true
+            }
+            .buttonStyle(.bordered)
+
+            NavigationLink("Knowledge Extraction Tests") {
+                ExtractionTestView()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+    #else
+    private var debugSection: some View {
+        EmptyView()
+    }
+    #endif
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {

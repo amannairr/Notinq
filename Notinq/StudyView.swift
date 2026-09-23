@@ -4,11 +4,16 @@ import NaturalLanguage
 import AppKit
 
 enum StudyWorkspaceSection: String, CaseIterable, Identifiable {
+    case learningInsights = "Learning Insights"
+    case summary = "Summary"
+    case keyConcepts = "Key Concepts"
+    case conceptMap = "Concept Map"
     case flashcards = "Flashcards"
     case quizzes = "Quizzes"
+    case learningMemory = "Learning Memory"
+    case knowledgeGaps = "Knowledge Gaps"
     case testMe = "Test Me"
     case insights = "Insights"
-    case learningInsights = "Learning Insights"
     case progress = "Progress"
 
     var id: String { rawValue }
@@ -27,6 +32,10 @@ private extension StudyView {
     var noteContentSource: String {
         let selected = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         return selected.isEmpty ? noteText.trimmingCharacters(in: .whitespacesAndNewlines) : selected
+    }
+
+    var activeDocumentStructure: DocumentStructure {
+        DocumentPreprocessor.shared.preprocess(title: noteLabel, text: noteContentSource)
     }
 
     var notebookNoteTexts: [String] {
@@ -80,236 +89,317 @@ private extension StudyView {
 
     func generateLearningInsights() {
         guard let noteID else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
 
-        let analysis = buildLearningInsightsAnalysis(noteText: text, notebookText: notebookCombinedText)
-        appState.updateLearningInsights(analysis, for: noteID)
-        let artifact = buildArtifact(
-            kind: .learningInsights,
-            title: "Learning Insights",
-            content: learningInsightsText(from: analysis),
-            sections: learningInsightsSections(from: analysis)
-        )
-        storeArtifact(artifact)
-        persistStudySession(notesReviewed: 1)
-        transientStatusMessage = "Learning Insights updated for \(noteLabel)."
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let analysis = generated.learningInsights
+                appState.updateLearningInsights(analysis, for: noteID)
+                let artifact = buildArtifact(
+                    kind: .learningInsights,
+                    title: "Learning Insights",
+                    content: learningInsightsText(from: analysis),
+                    sections: learningInsightsSections(from: analysis)
+                )
+                storeArtifact(artifact)
+                persistStudySession(notesReviewed: 1)
+                transientStatusMessage = "Learning Insights updated for \(noteLabel)."
+            }
+        }
     }
 
     func generateFlashcards() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
 
-        let cards = buildFlashcards(from: text)
-        mutateStudyData { studyData in
-            studyData.flashcards = cards
-            studyData.progress.flashcardsCreated += cards.count
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let cards = generated.flashcards
+                let artifact = buildArtifact(
+                    kind: .flashcards,
+                    title: "Flashcards",
+                    content: flashcardSetText(from: cards),
+                    sections: flashcardSections(from: cards)
+                )
+                storeArtifact(artifact)
+                resetFlashcardSession()
+                persistStudySession(notesReviewed: 1)
+                transientStatusMessage = cards.isEmpty ? "No flashcards could be generated." : "Generated \(cards.count) flashcards."
+            }
         }
-        let artifact = buildArtifact(
-            kind: .flashcards,
-            title: "Flashcards",
-            content: flashcardSetText(from: cards),
-            sections: flashcardSections(from: cards)
-        )
-        storeArtifact(artifact)
-        resetFlashcardSession()
-        persistStudySession(notesReviewed: 1)
-        transientStatusMessage = cards.isEmpty ? "No flashcards could be generated." : "Generated \(cards.count) flashcards."
     }
 
     func generateQuizSet() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
 
-        let quizSet = buildQuizSet(from: text)
-        mutateStudyData { studyData in
-            studyData.quizSets = [quizSet]
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let quizSet = generated.quizSets.first ?? buildQuizSet(from: structure.normalizedText)
+                let artifact = buildArtifact(
+                    kind: .quizGenerator,
+                    title: quizSet.title,
+                    content: quizSetText(from: quizSet),
+                    sections: quizSections(from: quizSet)
+                )
+                storeArtifact(artifact)
+                persistStudySession(notesReviewed: 1)
+                transientStatusMessage = "Generated a quiz set with \(quizSet.questions.count) questions."
+            }
         }
-        let artifact = buildArtifact(
-            kind: .quizGenerator,
-            title: quizSet.title,
-            content: quizSetText(from: quizSet),
-            sections: quizSections(from: quizSet)
-        )
-        storeArtifact(artifact)
-        persistStudySession(notesReviewed: 1)
-        transientStatusMessage = "Generated a quiz set with \(quizSet.questions.count) questions."
     }
 
     func generateSummary() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
 
-        let summaryPack = buildSummaryPack(from: text)
-        mutateStudyData { studyData in
-            studyData.summaryPack = summaryPack
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let summaryPack = generated.summaryPack
+                let artifact = buildArtifact(
+                    kind: .summaryGenerator,
+                    title: "Summary Generator",
+                    content: summaryText(for: summaryPack, mode: selectedSummaryMode),
+                    sections: summarySections(from: summaryPack)
+                )
+                storeArtifact(artifact)
+                persistStudySession(notesReviewed: 1)
+                transientStatusMessage = "Summary generated from the active note."
+            }
         }
-        let artifact = buildArtifact(
-            kind: .summaryGenerator,
-            title: "Summary Generator",
-            content: summaryText(for: summaryPack, mode: selectedSummaryMode),
-            sections: summarySections(from: summaryPack)
-        )
-        storeArtifact(artifact)
-        persistStudySession(notesReviewed: 1)
-        transientStatusMessage = "Summary generated from the active note."
     }
 
     func generateKeyConcepts() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
 
-        let concepts = buildKeyConceptInsights(from: text, notebookText: notebookCombinedText)
-        mutateStudyData { studyData in
-            studyData.insights = concepts
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let concepts = generated.insights
+                let artifact = buildArtifact(
+                    kind: .keyConcepts,
+                    title: "Key Concepts",
+                    content: keyConceptsText(from: concepts),
+                    sections: keyConceptSections(from: concepts)
+                )
+                storeArtifact(artifact)
+                persistStudySession(notesReviewed: 1)
+                transientStatusMessage = "Extracted key concepts and relationships."
+            }
         }
-        let artifact = buildArtifact(
-            kind: .keyConcepts,
-            title: "Key Concepts",
-            content: keyConceptsText(from: concepts),
-            sections: keyConceptSections(from: concepts)
-        )
-        storeArtifact(artifact)
-        persistStudySession(notesReviewed: 1)
-        transientStatusMessage = "Extracted key concepts and relationships."
+    }
+
+    func openKnowledgeExtractionDebugger() {
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            transientStatusMessage = "Add some note content first."
+            return
+        }
+
+        Task {
+            let report = await AIService.shared.inspectKnowledgeExtraction(
+                from: structure,
+                notebookText: notebookCombinedText
+            )
+            await MainActor.run {
+                knowledgeExtractionDebuggerReport = report
+                isShowingKnowledgeExtractionDebugger = true
+                transientStatusMessage = "Opened knowledge extraction debugger."
+            }
+        }
     }
 
     func generateExamPrep() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else {
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             transientStatusMessage = "Add some note content first."
             return
         }
 
-        let prep = buildExamPrep(from: text)
-        mutateStudyData { studyData in
-            studyData.examPrep = prep
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let prep = generated.examPrep
+                let artifact = buildArtifact(
+                    kind: .examPrep,
+                    title: "Exam Prep",
+                    content: examPrepText(from: prep),
+                    sections: examPrepSections(from: prep)
+                )
+                storeArtifact(artifact)
+                persistStudySession(notesReviewed: 1)
+                transientStatusMessage = "Exam prep generated from the active note."
+            }
         }
-        let artifact = buildArtifact(
-            kind: .examPrep,
-            title: "Exam Prep",
-            content: examPrepText(from: prep),
-            sections: examPrepSections(from: prep)
-        )
-        storeArtifact(artifact)
-        persistStudySession(notesReviewed: 1)
-        transientStatusMessage = "Exam prep generated from the active note."
     }
 
     func generateConceptMap() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        let map = buildConceptMap(from: text)
-        mutateStudyData { studyData in
-            studyData.conceptMap = map
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let map = generated.conceptMap
+                let artifact = buildArtifact(
+                    kind: .conceptMap,
+                    title: "Concept Map",
+                    content: conceptMapText(from: map),
+                    sections: conceptMapSections(from: map)
+                )
+                storeArtifact(artifact)
+            }
         }
-        let artifact = buildArtifact(
-            kind: .conceptMap,
-            title: "Concept Map",
-            content: conceptMapText(from: map),
-            sections: conceptMapSections(from: map)
-        )
-        storeArtifact(artifact)
     }
 
     func generateActiveRecallPrompts() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        let prompts = buildActiveRecallPrompts(from: text)
-        mutateStudyData { studyData in
-            studyData.activeRecallPrompts = prompts
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let prompts = generated.activeRecallPrompts
+                let artifact = buildArtifact(
+                    kind: .activeRecall,
+                    title: "Active Recall",
+                    content: activeRecallText(from: prompts),
+                    sections: activeRecallSections(from: prompts)
+                )
+                storeArtifact(artifact)
+                activeRecallIndex = 0
+                isActiveRecallAnswerRevealed = false
+            }
         }
-        let artifact = buildArtifact(
-            kind: .activeRecall,
-            title: "Active Recall",
-            content: activeRecallText(from: prompts),
-            sections: activeRecallSections(from: prompts)
-        )
-        storeArtifact(artifact)
-        activeRecallIndex = 0
-        isActiveRecallAnswerRevealed = false
     }
 
     func generateNotebookKnowledgeGaps() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        let gaps = buildNotebookKnowledgeGaps(currentNoteText: text)
-        mutateStudyData { studyData in
-            studyData.notebookKnowledgeGaps = gaps
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let gaps = generated.notebookKnowledgeGaps
+                let artifact = buildArtifact(
+                    kind: .notebookKnowledgeGaps,
+                    title: "Knowledge Gaps",
+                    content: notebookGapsText(from: gaps),
+                    sections: notebookGapSections(from: gaps)
+                )
+                storeArtifact(artifact)
+            }
         }
-        let artifact = buildArtifact(
-            kind: .notebookKnowledgeGaps,
-            title: "Knowledge Gaps",
-            content: notebookGapsText(from: gaps),
-            sections: notebookGapSections(from: gaps)
-        )
-        storeArtifact(artifact)
     }
 
     func generateLearningMemory() {
-        guard noteID != nil else { return }
-        let text = noteContentSource
-        guard !text.isEmpty else { return }
+        guard let noteID else { return }
+        let structure = activeDocumentStructure
+        guard !structure.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        let storedConcepts = studyData.learningMemory.map(\.concept)
-        let flashcardConcepts = studyData.flashcards.flatMap { flashcardConceptCandidates(from: $0) }
-        let quizConcepts = studyData.quizSets.flatMap { quizConceptCandidates(from: $0) }
-        let insightConcepts = studyData.insights.keyConcepts + studyData.insights.importantConcepts + studyData.insights.potentialExamTopics
-        let allCandidates = dedupeStrings(
-            extractConceptCandidates(from: text, limit: 14)
-                + storedConcepts
-                + flashcardConcepts
-                + quizConcepts
-                + insightConcepts
-        )
-
-        let rebuiltMemory = rebuildLearningMemory(from: allCandidates, currentStudyData: studyData)
-        mutateStudyData { studyData in
-            studyData.learningMemory = rebuiltMemory
-            studyData.lastGeneratedAt = Date()
+        let currentStudyData = studyData
+        Task {
+            let generated = await AIService.shared.generateStudyData(
+                from: structure,
+                notebookText: notebookCombinedText,
+                existingStudyData: currentStudyData
+            )
+            await MainActor.run {
+                appState.updateStudyData(generated, for: noteID)
+                let rebuiltMemory = generated.learningMemory
+                let artifact = buildArtifact(
+                    kind: .learningMemory,
+                    title: "Learning Memory",
+                    content: learningMemoryText(from: rebuiltMemory),
+                    sections: learningMemorySections(from: rebuiltMemory)
+                )
+                storeArtifact(artifact)
+                persistStudySession(notesReviewed: 1)
+            }
         }
-        let artifact = buildArtifact(
-            kind: .learningMemory,
-            title: "Learning Memory",
-            content: learningMemoryText(from: rebuiltMemory),
-            sections: learningMemorySections(from: rebuiltMemory)
-        )
-        storeArtifact(artifact)
-        persistStudySession(notesReviewed: 1)
     }
 
     func saveGeneratedContent(_ content: String) {
@@ -414,6 +504,91 @@ private extension StudyView {
         }
     }
 
+    private func startTeachMeSession() {
+        let context = teachMeAdaptiveContext()
+        let manualConcept = extractConceptCandidates(from: noteContentSource, limit: 1).first ?? noteLabel
+        let session = TeachMeEngine().startSession(
+            adaptiveContext: context,
+            manualConcept: manualConcept
+        )
+        teachMeDraftAnswer = ""
+        persistTeachMeSession(session)
+        transientStatusMessage = session.activeConceptName.map { "Teach Me question ready for \($0)." } ?? "No concept available for Teach Me yet."
+    }
+
+    private func submitTeachMeAnswer() {
+        guard let current = studyData.teachMeSession,
+              let question = current.activeQuestion else { return }
+
+        let submitted = TeachMeEngine().submitAnswer(teachMeDraftAnswer, for: current)
+        if let response = submitted.answerHistory.last {
+            let recorder = LearningSignalRecorder()
+            recorder.recordTeachMeAttempt(question: question)
+            recorder.recordTeachMeEvaluation(question: question, evaluation: response.evaluation)
+        }
+        teachMeDraftAnswer = ""
+        persistTeachMeSession(submitted)
+    }
+
+    private func advanceTeachMeSession() {
+        guard let current = studyData.teachMeSession else { return }
+        let advanced = TeachMeEngine().advanceAfterFeedback(current)
+        teachMeDraftAnswer = ""
+        persistTeachMeSession(advanced)
+    }
+
+    private func persistTeachMeSession(_ session: TeachMeSession) {
+        mutateStudyData { studyData in
+            studyData.teachMeSession = session
+            studyData.lastGeneratedAt = Date()
+        }
+    }
+
+    private func teachMeAdaptiveContext() -> AdaptiveExplanationContext {
+        let gaps = studyData.notebookKnowledgeGaps.isEmpty
+            ? buildNotebookKnowledgeGaps(currentNoteText: noteContentSource)
+            : studyData.notebookKnowledgeGaps
+        let gapTitles = gaps
+            .sorted { $0.priority > $1.priority }
+            .map(\.title)
+        let historicallyConfusing = studyData.learningMemory
+            .filter { $0.missedCount > $0.masteredCount }
+            .sorted { $0.missedCount > $1.missedCount }
+            .map(\.concept)
+        let masteryStates = Dictionary(
+            studyData.learningMemory.map { entry in
+                (TeachMeEngine.conceptID(for: entry.concept), MasteryState.state(for: entry.masteryScore))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let sourceExcerpt = noteContentSource
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sources = sourceExcerpt.isEmpty ? [] : [
+            AdaptiveExplanationSource(
+                sourceID: noteID?.uuidString ?? UUID().uuidString,
+                sourceType: "note",
+                noteID: noteID,
+                noteTitle: noteLabel,
+                snippet: sourceExcerpt,
+                relevantExcerpt: sourceExcerpt
+            )
+        ]
+
+        return AdaptiveExplanationContext(
+            selectedText: selectedText,
+            conceptIDs: gapTitles.map(TeachMeEngine.conceptID(for:)),
+            identifiedKnowledgeGaps: gapTitles,
+            historicallyConfusingConcepts: historicallyConfusing,
+            masteryStates: masteryStates,
+            retrievedNoteSources: sources,
+            inferredLearnerLevel: "Study Session",
+            confidence: gapTitles.isEmpty ? 0.35 : 0.7
+        )
+    }
+
     func mutateStudyData(_ mutation: (inout NoteStudyData) -> Void) {
         guard let noteID else { return }
         appState.mutateStudyData(for: noteID) { studyData in
@@ -421,168 +596,630 @@ private extension StudyView {
         }
     }
 
-    func buildLearningInsightsAnalysis(noteText: String, notebookText: String) -> LectureCompletenessAnalysis {
-        let noteConcepts = extractConceptCandidates(from: noteText, limit: 18)
-        let notebookConcepts = extractNotebookConcepts(from: notebookText)
-        let conceptCounts = conceptFrequency(in: noteText)
-        let missingPrerequisites = prerequisiteGaps(for: noteText, notebookText: notebookText)
+    func cachedStudyKnowledgeSnapshot(from noteText: String) -> StudyKnowledgeSnapshot {
+        let notebookText = notebookCombinedText
+        let signature = studyKnowledgeSignature(noteTitle: noteLabel, noteText: noteText, notebookText: notebookText)
 
-        let partialConcepts = noteConcepts
-            .filter { conceptCounts[normalizeConceptKey($0), default: 0] == 1 }
-            .prefix(4)
-            .map { concept in
-                LectureCoverageItem(
-                    title: concept,
-                    state: .partial,
-                    whatWasMissed: "This concept appears once or only in passing.",
-                    whyItMatters: "Students usually need a second pass to turn a passing reference into durable recall.",
-                    shortExplanation: "You mention it, but the note does not fully develop the idea yet.",
-                    suggestedAddition: "Add one definition, one example, and one connection to another term.",
-                    importance: 0.7,
-                    evidence: [concept],
-                    matchScore: 0.45,
-                    noteSummary: sentenceContaining(concept, in: noteText)
-                )
+        if let noteID {
+            let currentStudyData = appState.studyData(for: noteID)
+            if currentStudyData.knowledgeSignature == signature, currentStudyData.knowledgeSnapshot.hasContent {
+                return currentStudyData.knowledgeSnapshot
             }
 
-        let wellCovered = noteConcepts
-            .filter { conceptCounts[normalizeConceptKey($0), default: 0] >= 2 }
-            .prefix(5)
-            .map { concept in
-                LectureCoverageItem(
-                    title: concept,
-                    state: .covered,
-                    whatWasMissed: "",
-                    whyItMatters: "This looks reinforced across the note.",
-                    shortExplanation: sentenceContaining(concept, in: noteText),
-                    suggestedAddition: "",
-                    importance: 1.0,
-                    evidence: [concept],
-                    matchScore: 0.82,
-                    noteSummary: sentenceContaining(concept, in: noteText)
-                )
+            let snapshot = extractedStudyKnowledgeSnapshot(
+                noteTitle: noteLabel,
+                noteText: noteText,
+                notebookText: notebookText,
+                signature: signature
+            )
+            mutateStudyData { studyData in
+                studyData.knowledgeSignature = signature
+                studyData.knowledgeSnapshot = snapshot
             }
+            return snapshot
+        }
 
-        let missing = missingPrerequisites.prefix(5).map { gap in
-            LectureCoverageItem(
+        return extractedStudyKnowledgeSnapshot(
+            noteTitle: noteLabel,
+            noteText: noteText,
+            notebookText: notebookText,
+            signature: signature
+        )
+    }
+
+    private func extractedStudyKnowledgeSnapshot(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String,
+        signature: String
+    ) -> StudyKnowledgeSnapshot {
+        if let cached = KnowledgeExtractionCache.shared.cachedKnowledge(for: signature) {
+            return cached.legacySnapshotRepresentation()
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var extracted: StructuredKnowledge?
+
+        Task {
+            let run = await KnowledgeExtractionEngine.shared.extractRun(
+                noteTitle: noteTitle,
+                noteText: noteText,
+                notebookText: notebookText
+            )
+            extracted = run.knowledge
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+
+        if let extracted {
+            KnowledgeExtractionCache.shared.store(extracted, for: signature)
+            return extracted.legacySnapshotRepresentation()
+        }
+
+        return StudyKnowledgeSnapshot(title: noteTitle, sourceSignature: signature)
+    }
+
+    private func studyKnowledgeSignature(noteTitle: String, noteText: String, notebookText: String) -> String {
+        [
+            noteTitle,
+            noteText,
+            notebookText
+        ]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .joined(separator: "\u{241E}")
+    }
+
+    private func buildStudyKnowledgeSnapshot(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String,
+        signature: String
+    ) -> StudyKnowledgeSnapshot {
+        let cleanedText = normalizeStudyNoteText(noteText)
+        let sentences = splitSentences(cleanedText)
+        let concepts = dedupeStrings(extractConceptCandidates(from: cleanedText, limit: 24))
+        let notebookConcepts = Set(extractConceptCandidates(from: notebookText, limit: 24).map(normalizeConceptKey))
+        let conceptCounts = conceptFrequency(in: cleanedText)
+        let headingCandidates = cleanedText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { isLikelyHeading($0) }
+
+        func evidence(for concept: String) -> [String] {
+            let matching = sentences.filter { $0.localizedCaseInsensitiveContains(concept) }
+            if !matching.isEmpty {
+                return Array(matching.prefix(2))
+            }
+            return Array(headingCandidates.filter { $0.localizedCaseInsensitiveContains(concept) }.prefix(1))
+        }
+
+        func summary(for concept: String) -> String {
+            let sentence = bestSentence(for: concept, in: sentences)
+                ?? {
+                    let fallback = sentenceContaining(concept, in: cleanedText)
+                    return fallback.isEmpty ? nil : fallback
+                }()
+                ?? headingCandidates.first(where: { $0.localizedCaseInsensitiveContains(concept) })
+                ?? concept
+            return sentenceFragment(stripCitationMarkers(sentence))
+        }
+
+        func importance(for concept: String) -> Double {
+            let normalized = normalizeConceptKey(concept)
+            let frequency = Double(conceptCounts[normalized, default: 0])
+            let sentenceMatches = Double(sentences.filter { $0.localizedCaseInsensitiveContains(concept) }.count)
+            let headingBoost = headingCandidates.contains(where: { normalizeConceptKey($0).contains(normalized) }) ? 0.18 : 0
+            let notebookBoost = notebookConcepts.contains(normalized) ? 0.12 : 0
+            return min(1.0, 0.22 + (frequency * 0.16) + (sentenceMatches * 0.09) + headingBoost + notebookBoost)
+        }
+
+        func difficulty(for concept: String) -> Double {
+            let normalized = normalizeConceptKey(concept)
+            let words = normalized.split(separator: " ").count
+            let hasFormulaLikeShape = concept.contains("=") || concept.contains("->") || concept.contains("(") || concept.contains(")")
+            let conceptFrequency = conceptCounts[normalized, default: 0]
+            var score = 0.2 + min(0.4, Double(words) * 0.06)
+            if hasFormulaLikeShape { score += 0.2 }
+            if conceptFrequency == 1 { score += 0.1 }
+            if evidence(for: concept).count <= 1 { score += 0.1 }
+            return min(1.0, score)
+        }
+
+        func relatedTitles(for concept: String) -> [String] {
+            let normalized = normalizeConceptKey(concept)
+            let related = sentences
+                .filter { $0.localizedCaseInsensitiveContains(concept) }
+                .flatMap { extractConceptCandidates(from: $0, limit: 4) }
+                .filter { normalizeConceptKey($0) != normalized }
+            return dedupeStrings(related).prefix(3).map(displayConcept)
+        }
+
+        func item(category: String, concept: String) -> StudyKnowledgeItem {
+            StudyKnowledgeItem(
+                title: displayConcept(concept),
+                summary: summary(for: concept),
+                evidence: evidence(for: concept),
+                importance: importance(for: concept),
+                difficulty: difficulty(for: concept),
+                aliases: aliases(for: concept),
+                relatedTitles: relatedTitles(for: concept),
+                category: category
+            )
+        }
+
+        let definitionTriggers = [" is ", " are ", " means ", " refers to ", " defined as ", " describes "]
+        let procedureTriggers = [" first ", " then ", " next ", " step ", " process ", " algorithm ", " workflow ", " procedure "]
+        let exampleTriggers = [" for example", " for instance", " such as", " e.g.", " example:"]
+        let misconceptionTriggers = [" common mistake", " misconception", " confused with", " do not ", " don't ", " not "]
+        let formulaTriggers = ["=", "→", "->", "∑", "∫", "≈", "≤", "≥"]
+
+        let keyConceptItems = concepts.prefix(12).map { item(category: "key_term", concept: $0) }
+        let definitions = concepts.compactMap { concept -> StudyKnowledgeItem? in
+            guard let sentence = sentences.first(where: { sentence in
+                sentence.localizedCaseInsensitiveContains(concept.lowercased()) || sentence.localizedCaseInsensitiveContains(concept)
+            }) else { return nil }
+            let lower = sentence.lowercased()
+            guard definitionTriggers.contains(where: { lower.contains($0) }) else { return nil }
+            return item(category: "definition", concept: concept)
+        }
+
+        let procedures = sentences.compactMap { sentence -> StudyKnowledgeItem? in
+            let lower = sentence.lowercased()
+            guard procedureTriggers.contains(where: { lower.contains($0) }) else { return nil }
+            guard let concept = concepts.first(where: { lower.contains($0.lowercased()) }) ?? concepts.first else { return nil }
+            return StudyKnowledgeItem(
+                title: displayConcept(concept),
+                summary: sentenceFragment(stripCitationMarkers(sentence)),
+                evidence: [sentence],
+                importance: 0.72,
+                difficulty: 0.58,
+                relatedTitles: relatedTitles(for: concept),
+                category: "procedure"
+            )
+        }
+
+        let examples = sentences.compactMap { sentence -> StudyKnowledgeItem? in
+            let lower = sentence.lowercased()
+            guard exampleTriggers.contains(where: { lower.contains($0) }) else { return nil }
+            guard let concept = concepts.first(where: { lower.contains($0.lowercased()) }) ?? concepts.first else { return nil }
+            return StudyKnowledgeItem(
+                title: displayConcept(concept),
+                summary: sentenceFragment(stripCitationMarkers(sentence)),
+                evidence: [sentence],
+                importance: 0.64,
+                difficulty: 0.42,
+                relatedTitles: relatedTitles(for: concept),
+                category: "example"
+            )
+        }
+
+        let formulas = sentences.compactMap { sentence -> StudyKnowledgeItem? in
+            let lower = sentence.lowercased()
+            guard formulaTriggers.contains(where: { sentence.contains($0) }) || lower.contains("formula") else { return nil }
+            guard let concept = concepts.first(where: { lower.contains($0.lowercased()) }) ?? concepts.first else { return nil }
+            return StudyKnowledgeItem(
+                title: displayConcept(concept),
+                summary: sentenceFragment(stripCitationMarkers(sentence)),
+                evidence: [sentence],
+                importance: 0.78,
+                difficulty: 0.82,
+                relatedTitles: relatedTitles(for: concept),
+                category: "formula"
+            )
+        }
+
+        let misconceptions = sentences.compactMap { sentence -> StudyKnowledgeItem? in
+            let lower = sentence.lowercased()
+            guard misconceptionTriggers.contains(where: { lower.contains($0) }) else { return nil }
+            guard let concept = concepts.first(where: { lower.contains($0.lowercased()) }) ?? concepts.first else { return nil }
+            return StudyKnowledgeItem(
+                title: displayConcept(concept),
+                summary: sentenceFragment(stripCitationMarkers(sentence)),
+                evidence: [sentence],
+                importance: 0.6,
+                difficulty: 0.62,
+                relatedTitles: relatedTitles(for: concept),
+                category: "misconception"
+            )
+        }
+
+        let importantFacts = concepts.prefix(8).map { concept in
+            StudyKnowledgeItem(
+                title: displayConcept(concept),
+                summary: summary(for: concept),
+                evidence: evidence(for: concept),
+                importance: importance(for: concept),
+                difficulty: difficulty(for: concept),
+                relatedTitles: relatedTitles(for: concept),
+                category: "fact"
+            )
+        }
+
+        let prerequisites = prerequisiteGaps(for: cleanedText, notebookText: notebookText).prefix(8).map { gap in
+            StudyKnowledgeItem(
                 title: gap.title,
-                state: .missing,
-                whatWasMissed: gap.description,
-                whyItMatters: "This prerequisite unlocks better understanding of the surrounding topic.",
-                shortExplanation: gap.evidence,
-                suggestedAddition: "Add a short definition or worked example.",
-                importance: gap.priority,
+                summary: gap.description,
                 evidence: [gap.evidence],
-                matchScore: 0.2,
-                noteSummary: gap.evidence
+                importance: min(1.0, gap.priority / 6.0),
+                difficulty: 0.76,
+                relatedTitles: [],
+                category: "prerequisite"
             )
         }
 
-        let totalSignals = Double(max(1, noteConcepts.count + missing.count))
-        let achieved = Double(wellCovered.count * 2 + partialConcepts.count)
-        let score = min(1, max(0.1, achieved / (totalSignals * 1.2)))
+        let hierarchyRoots = buildKnowledgeHierarchy(
+            noteTitle: noteTitle,
+            concepts: keyConceptItems,
+            relationships: relationshipsBetween(concepts: keyConceptItems, in: sentences)
+        )
 
-        let reviewCandidates = (missingPrerequisites + partialConcepts.map {
-            StudyKnowledgeGap(
-                title: $0.title,
-                description: $0.shortExplanation,
-                evidence: $0.noteSummary,
-                priority: $0.importance
+        let knowledgeDifficulty: StudyKnowledgeDifficulty
+        let averageDifficulty = concepts.isEmpty ? 0.5 : concepts.map { difficulty(for: $0) }.reduce(0, +) / Double(concepts.count)
+        switch averageDifficulty {
+        case ..<0.38:
+            knowledgeDifficulty = .intro
+        case ..<0.68:
+            knowledgeDifficulty = .intermediate
+        default:
+            knowledgeDifficulty = .advanced
+        }
+
+        return StudyKnowledgeSnapshot(
+            title: noteTitle,
+            sourceSignature: signature,
+            cleanedText: cleanedText,
+            concepts: keyConceptItems,
+            definitions: definitions,
+            relationships: relationshipsBetween(concepts: keyConceptItems, in: sentences),
+            examples: examples,
+            procedures: procedures,
+            formulas: formulas,
+            importantFacts: importantFacts,
+            keyTerms: keyConceptItems,
+            misconceptions: misconceptions,
+            prerequisites: prerequisites,
+            hierarchy: hierarchyRoots,
+            difficulty: knowledgeDifficulty,
+            supportingExamples: Array((examples + procedures).prefix(4)),
+            summaryHighlights: summaryHighlights(from: keyConceptItems, definitions: definitions, importantFacts: importantFacts),
+            examFocus: examFocus(from: keyConceptItems, definitions: definitions, formulas: formulas, procedures: procedures)
+        )
+    }
+
+    private func isLikelyHeading(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.hasSuffix(":") { return true }
+        if trimmed.count < 64, trimmed == trimmed.uppercased(), trimmed.contains(where: { $0.isLetter }) { return true }
+        if trimmed.first?.isNumber == true { return true }
+        return false
+    }
+
+    private func normalizeStudyNoteText(_ text: String) -> String {
+        let lines = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: .newlines)
+
+        var cleaned: [String] = []
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else {
+                if cleaned.last != "" {
+                    cleaned.append("")
+                }
+                continue
+            }
+
+            if let last = cleaned.last, last.hasSuffix("-"), line.first?.isLowercase == true {
+                cleaned[cleaned.count - 1] = String(last.dropLast()) + line
+                continue
+            }
+
+            if let last = cleaned.last, shouldMergeStudyLines(previous: last, current: line) {
+                cleaned[cleaned.count - 1] = last + " " + line
+            } else if cleaned.last != line {
+                cleaned.append(line)
+            }
+        }
+
+        return cleaned.joined(separator: "\n")
+    }
+
+    private func shouldMergeStudyLines(previous: String, current: String) -> Bool {
+        guard !previous.isEmpty, !current.isEmpty else { return false }
+        let previousEndsWithSentence = previous.last.map { ".!?;:".contains($0) } ?? false
+        if previousEndsWithSentence { return false }
+        if current.first?.isLowercase == true { return true }
+        if current.first?.isNumber == true { return true }
+        return current.hasPrefix(")") || current.hasPrefix("•")
+    }
+
+    private func buildKnowledgeHierarchy(
+        noteTitle: String,
+        concepts: [StudyKnowledgeItem],
+        relationships: [StudyKnowledgeRelationship]
+    ) -> [StudyKnowledgeNode] {
+        let childNodes = concepts.prefix(6).map { concept -> StudyKnowledgeNode in
+            let related = relationships
+                .filter { $0.sourceTitle == concept.title || $0.targetTitle == concept.title }
+                .map { $0.sourceTitle == concept.title ? $0.targetTitle : $0.sourceTitle }
+            let grandchildren = dedupeStrings(related)
+                .prefix(3)
+                .map { StudyKnowledgeNode(title: $0) }
+            return StudyKnowledgeNode(title: concept.title, summary: concept.summary, children: Array(grandchildren))
+        }
+        return [StudyKnowledgeNode(title: noteTitle, summary: "Primary study topic", children: Array(childNodes))]
+    }
+
+    private func relationshipsBetween(concepts: [StudyKnowledgeItem], in sentences: [String]) -> [StudyKnowledgeRelationship] {
+        var relationships: [StudyKnowledgeRelationship] = []
+        let titles = concepts.map(\.title)
+
+        for sentence in sentences {
+            let matches = titles.filter { sentence.localizedCaseInsensitiveContains($0) }
+            guard matches.count >= 2 else { continue }
+            let first = matches[0]
+            for target in matches.dropFirst().prefix(3) {
+                relationships.append(
+                    StudyKnowledgeRelationship(
+                        sourceTitle: first,
+                        targetTitle: target,
+                        relation: relationType(for: sentence),
+                        confidence: sentence.count > 80 ? 0.82 : 0.68
+                    )
+                )
+            }
+        }
+
+        return dedupeKnowledgeRelationships(relationships)
+    }
+
+    private func relationType(for sentence: String) -> String {
+        let lower = sentence.lowercased()
+        if lower.contains("depends on") || lower.contains("requires") || lower.contains("prerequisite") {
+            return "dependsOn"
+        }
+        if lower.contains("causes") || lower.contains("leads to") {
+            return "leadsTo"
+        }
+        if lower.contains("example") {
+            return "illustrates"
+        }
+        if lower.contains("compares") || lower.contains("versus") || lower.contains("compared to") {
+            return "contrastsWith"
+        }
+        return "relatedTo"
+    }
+
+    private func dedupeKnowledgeRelationships(_ relationships: [StudyKnowledgeRelationship]) -> [StudyKnowledgeRelationship] {
+        var seen = Set<String>()
+        var results: [StudyKnowledgeRelationship] = []
+        for relationship in relationships {
+            let key = [
+                normalizeConceptKey(relationship.sourceTitle),
+                normalizeConceptKey(relationship.targetTitle),
+                relationship.relation
+            ].joined(separator: "|")
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            results.append(relationship)
+        }
+        return results
+    }
+
+    private func summaryHighlights(from concepts: [StudyKnowledgeItem], definitions: [StudyKnowledgeItem], importantFacts: [StudyKnowledgeItem]) -> [String] {
+        let items = [
+            concepts.prefix(3).map(\.title),
+            definitions.prefix(2).map(\.title),
+            importantFacts.prefix(2).map(\.title)
+        ].flatMap { $0 }
+        return dedupeStrings(items).prefix(6).map { $0 }
+    }
+
+    private func examFocus(from concepts: [StudyKnowledgeItem], definitions: [StudyKnowledgeItem], formulas: [StudyKnowledgeItem], procedures: [StudyKnowledgeItem]) -> [String] {
+        let items = [
+            definitions.prefix(3).map { "Define \($0.title)" },
+            formulas.prefix(2).map { "Use the formula for \($0.title)" },
+            procedures.prefix(2).map { "Explain the steps for \($0.title)" },
+            concepts.prefix(3).map { "Apply \($0.title) in context" }
+        ].flatMap { $0 }
+        return dedupeStrings(items).prefix(8).map { $0 }
+    }
+
+    private func aliases(for concept: String) -> [String] {
+        let raw = concept
+            .replacingOccurrences(of: "(", with: "")
+            .replacingOccurrences(of: ")", with: "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return dedupeStrings(raw)
+    }
+
+    func buildLearningInsightsAnalysis(noteText: String, notebookText: String) -> LectureCompletenessAnalysis {
+        let lectureKnowledge = cachedStudyKnowledgeSnapshot(from: noteText)
+        let notebookKnowledge = extractedStudyKnowledgeSnapshot(
+            noteTitle: "Student Notes",
+            noteText: notebookText,
+            notebookText: "",
+            signature: studyKnowledgeSignature(noteTitle: "Student Notes", noteText: notebookText, notebookText: "")
+        )
+
+        let notebookLookup = Set(
+            (notebookKnowledge.concepts + notebookKnowledge.definitions + notebookKnowledge.keyTerms)
+                .flatMap { [$0.title] + $0.aliases + $0.relatedTitles }
+                .map(normalizeConceptKey)
+        )
+
+        func makeCoverageItem(_ concept: StudyKnowledgeItem, state: LectureCoverageState, noteSummary: String) -> LectureCoverageItem {
+            let related = concept.relatedTitles.prefix(2).joined(separator: ", ")
+            return LectureCoverageItem(
+                title: concept.title,
+                state: state,
+                whatWasMissed: state == .covered ? "" : "The note does not fully capture \(concept.title).",
+                whyItMatters: state == .missing ? "This concept is required to understand the source more completely." : "This idea is relevant to the note's study flow.",
+                shortExplanation: concept.summary.isEmpty ? noteSummary : concept.summary,
+                suggestedAddition: state == .covered ? "" : "Add a short definition\(related.isEmpty ? "" : ", connect it to \(related)") and one example.",
+                importance: concept.importance,
+                evidence: concept.evidence.isEmpty ? [concept.summary] : concept.evidence,
+                matchScore: state == .covered ? 0.88 : (state == .partial ? 0.56 : 0.12),
+                noteSummary: noteSummary
             )
-        })
+        }
+
+        let lectureConcepts = lectureKnowledge.concepts
+        let covered = lectureConcepts.filter { concept in
+            let key = normalizeConceptKey(concept.title)
+            return notebookLookup.contains(key) || concept.relatedTitles.contains(where: { notebookLookup.contains(normalizeConceptKey($0)) })
+        }
         .prefix(6)
+        .map { makeCoverageItem($0, state: .covered, noteSummary: $0.summary) }
 
-        let reviewPriority = reviewCandidates.enumerated().map { index, item in
-            LectureReviewPriorityItem(
-                rank: index + 1,
-                title: item.title,
-                reason: item.description,
-                state: missingPrerequisites.contains(where: { $0.title == item.title }) ? .missing : .partial,
-                importance: item.priority
-            )
+        let partiallyCaptured = lectureConcepts.filter { concept in
+            let key = normalizeConceptKey(concept.title)
+            return !notebookLookup.contains(key) && concept.relatedTitles.contains(where: { notebookLookup.contains(normalizeConceptKey($0)) })
         }
+        .prefix(5)
+        .map { makeCoverageItem($0, state: .partial, noteSummary: $0.summary) }
+
+        let missingConcepts = lectureKnowledge.prerequisites
+            .filter { prerequisite in
+                !notebookLookup.contains(normalizeConceptKey(prerequisite.title))
+            }
+            .prefix(5)
+            .map { makeCoverageItem($0, state: .missing, noteSummary: $0.summary) }
+
+        let weightedScore = (
+            Double(covered.count) * 1.0 +
+            Double(partiallyCaptured.count) * 0.55 +
+            Double(max(0, lectureConcepts.count - covered.count - partiallyCaptured.count - missingConcepts.count)) * 0.18
+        ) / Double(max(1, lectureConcepts.count))
+
+        let reviewPriority = (missingConcepts + partiallyCaptured)
+            .enumerated()
+            .map { index, item in
+                LectureReviewPriorityItem(
+                    rank: index + 1,
+                    title: item.title,
+                    reason: item.state == .missing ? "Missing from the current note context." : "Only partially explained in the current note.",
+                    state: item.state,
+                    importance: item.importance
+                )
+            }
+
+        let summary = [
+            "See which concepts are fully captured, partially explained, or missing from your notes.",
+            "Covered: \(covered.count). Partial: \(partiallyCaptured.count). Missing: \(missingConcepts.count)."
+        ].joined(separator: " ")
 
         return LectureCompletenessAnalysis(
-            completenessScore: score,
-            lectureConceptCount: noteConcepts.count,
-            noteConceptCount: notebookConcepts.count,
-            missingConcepts: missing,
-            partiallyCapturedConcepts: partialConcepts,
-            wellCoveredConcepts: wellCovered,
-            missingVisualContent: [],
+            completenessScore: min(1, max(0, weightedScore)),
+            lectureConceptCount: lectureConcepts.count,
+            noteConceptCount: notebookKnowledge.concepts.count,
+            missingConcepts: missingConcepts,
+            partiallyCapturedConcepts: partiallyCaptured,
+            wellCoveredConcepts: covered,
+            missingVisualContent: lectureKnowledge.supportingExamples.filter { $0.category == "example" }.map {
+                LectureVisualGap(
+                    title: $0.title,
+                    whatWasMissed: "The note likely relied on a visual or worked example here.",
+                    whyItMatters: "Visuals often preserve structure that is hard to reconstruct from text alone.",
+                    shortExplanation: $0.summary,
+                    suggestedAddition: "Add a sketch, a diagram caption, or a short visual note.",
+                    importance: $0.importance,
+                    evidence: $0.evidence
+                )
+            },
             reviewPriority: reviewPriority,
-            summary: summarySentence(for: noteText, missingCount: missing.count, coveredCount: wellCovered.count),
+            summary: summary,
             generatedAt: Date()
         )
     }
 
     func buildFlashcards(from text: String) -> [StudyFlashcard] {
-        let concepts = extractConceptCandidates(from: text, limit: 10)
-        let sentences = splitSentences(text)
+        let knowledge = cachedStudyKnowledgeSnapshot(from: text)
         var cards: [StudyFlashcard] = []
         var seenFronts = Set<String>()
 
-        for concept in concepts.prefix(6) {
-            let lowerConcept = concept.lowercased()
-            let supportingSentence = sentences.first(where: { $0.lowercased().contains(lowerConcept) }) ?? sentences.first ?? text
-            let supportingContext = sentences.dropFirst().first(where: { $0.lowercased().contains(lowerConcept) && $0 != supportingSentence }) ?? supportingSentence
-            let backAnswer = condensedAnswer(from: supportingSentence, for: concept)
-            let front = [
-                "Question",
-                "What does \(displayConcept(concept)) mean in this note?",
-                "Concept prompt",
-                displayConcept(concept),
-                "Definition prompt",
-                "Define it in your own words."
-            ].joined(separator: "\n")
-            guard seenFronts.insert(front).inserted else { continue }
-            cards.append(
-                StudyFlashcard(
-                    type: .definition,
-                    front: front,
-                    back: [
-                        "Correct answer",
-                        backAnswer,
-                        "Explanation",
-                        supportingSentence,
-                        "Supporting context",
-                        supportingContext,
-                        "Why it matters",
-                        "This is one of the note's core ideas."
-                    ].joined(separator: "\n"),
-                    whyItMatters: "This is one of the note's core ideas."
-                )
+        func appendCard(type: StudyCardType, front: String, back: String, why: String) {
+            guard seenFronts.insert(front.lowercased()).inserted else { return }
+            cards.append(StudyFlashcard(type: type, front: front, back: back, whyItMatters: why))
+        }
+
+        for concept in knowledge.definitions.prefix(3) {
+            appendCard(
+                type: .definition,
+                front: "What is \(concept.title)?",
+                back: [
+                    concept.summary,
+                    concept.evidence.first ?? "Use the note context to refine the definition.",
+                    "Why it matters",
+                    "This concept supports the rest of the topic."
+                ].joined(separator: "\n"),
+                why: "Definition recall turns a name into a usable concept."
             )
         }
 
-        for sentence in sentences.prefix(6) {
-            guard let concept = concepts.first(where: { sentence.lowercased().contains($0.lowercased()) }) else { continue }
-            let blanked = sentence.replacingOccurrences(of: concept, with: "_____")
-            let front = [
-                "Question",
-                blanked,
-                "Concept prompt",
-                displayConcept(concept),
-                "Definition prompt",
-                "Recall the missing term."
-            ].joined(separator: "\n")
-            guard seenFronts.insert(front).inserted else { continue }
-            cards.append(
-                StudyFlashcard(
-                    type: .cloze,
-                    front: front,
-                    back: [
-                        "Correct answer",
-                        displayConcept(concept),
-                        "Explanation",
-                        sentence,
-                        "Supporting context",
-                        sentence,
-                        "Why it matters",
-                        "Cloze recall forces active reconstruction of the missing term."
-                    ].joined(separator: "\n"),
-                    whyItMatters: "Cloze recall forces active reconstruction of the missing term."
-                )
+        for item in knowledge.examples.prefix(2) {
+            appendCard(
+                type: .questionAnswer,
+                front: "Give an example of \(item.title).",
+                back: [
+                    item.summary,
+                    item.evidence.first ?? "",
+                    "Why it matters",
+                    "Examples show whether you can apply the idea, not just repeat it."
+                ].joined(separator: "\n"),
+                why: "Examples test application, not keyword matching."
+            )
+        }
+
+        for item in knowledge.misconceptions.prefix(2) {
+            appendCard(
+                type: .concept,
+                front: "What is a common mistake about \(item.title)?",
+                back: [
+                    item.summary,
+                    "Corrective cue",
+                    "This note warns against treating the idea as \(item.summary.lowercased())."
+                ].joined(separator: "\n"),
+                why: "Misconception cards help students avoid predictable exam errors."
+            )
+        }
+
+        for item in knowledge.formulas.prefix(2) {
+            appendCard(
+                type: .cloze,
+                front: item.summary,
+                back: [
+                    item.title,
+                    "Formula cue",
+                    item.summary
+                ].joined(separator: "\n"),
+                why: "Formula recall should focus on the structure and the meaning of each term."
+            )
+        }
+
+        for item in knowledge.prerequisites.prefix(1) {
+            appendCard(
+                type: .questionAnswer,
+                front: "Why do you need to know \(item.title)?",
+                back: [
+                    item.summary,
+                    item.evidence.first ?? "",
+                    "Why it matters",
+                    "Prerequisites unlock the rest of the topic."
+                ].joined(separator: "\n"),
+                why: "Prerequisite cards make weak foundations visible early."
+            )
+        }
+
+        if cards.isEmpty, let firstConcept = knowledge.concepts.first {
+            appendCard(
+                type: .definition,
+                front: "What is \(firstConcept.title)?",
+                back: firstConcept.summary,
+                why: "Start with the note's primary concept."
             )
         }
 
@@ -590,130 +1227,283 @@ private extension StudyView {
     }
 
     func buildQuizSet(from text: String) -> StudyQuizSet {
-        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 10))
-        let sentences = splitSentences(text)
+        let knowledge = cachedStudyKnowledgeSnapshot(from: text)
         var questions: [StudyQuizQuestion] = []
+        let conceptItems = knowledge.concepts
+        let definitionLookup = knowledge.definitions.reduce(into: [String: StudyKnowledgeItem]()) { result, item in
+            let key = normalizeConceptKey(item.title)
+            if result[key] == nil {
+                result[key] = item
+            }
+        }
+        let relationshipLookup = knowledge.relationships
+        var usedConceptKeys = Set<String>()
 
-        for concept in concepts.prefix(4) {
-            let relatedSentence = bestSentence(for: concept, in: sentences) ?? text
-            let distractors = concepts
-                .filter { normalizeConceptKey($0) != normalizeConceptKey(concept) }
+        func distractors(excluding concept: StudyKnowledgeItem) -> [String] {
+            conceptItems
+                .filter { normalizeConceptKey($0.title) != normalizeConceptKey(concept.title) }
                 .prefix(3)
-                .map(displayConcept)
-            let options = ([displayConcept(concept)] + distractors).shuffled()
+                .map(\.title)
+        }
+
+        for concept in conceptItems.prefix(3) {
+            let options = ([concept.title] + distractors(excluding: concept)).shuffled()
+            let explanation = definitionLookup[normalizeConceptKey(concept.title)]?.summary ?? concept.summary
             questions.append(
                 StudyQuizQuestion(
                     type: .multipleChoice,
-                    prompt: "Which concept best matches this note excerpt: \(sentenceFragment(stripCitationMarkers(relatedSentence)))?",
+                    prompt: "Which choice best describes \(concept.title) in this note?",
                     options: options,
-                    correctAnswer: displayConcept(concept),
-                    explanation: quizExplanation(from: relatedSentence, concept: concept),
-                    keywords: [concept]
+                    correctAnswer: concept.title,
+                    explanation: explanation,
+                    keywords: [concept.title]
+                )
+            )
+            usedConceptKeys.insert(normalizeConceptKey(concept.title))
+        }
+
+        if let concept = conceptItems.dropFirst().first {
+            questions.append(
+                StudyQuizQuestion(
+                    type: .trueFalse,
+                    prompt: "True or false: \(concept.title) is a topic worth revisiting for understanding this note.",
+                    options: ["True", "False"],
+                    correctAnswer: "True",
+                    explanation: concept.summary,
+                    keywords: [concept.title]
                 )
             )
         }
 
-        for concept in concepts.suffix(3) {
-            let supportingSentence = bestSentence(for: concept, in: sentences) ?? text
+        if let concept = conceptItems.first {
+            let blank = (definitionLookup[normalizeConceptKey(concept.title)]?.summary ?? concept.summary)
+                .replacingOccurrences(of: concept.title, with: "_____")
+            questions.append(
+                StudyQuizQuestion(
+                    type: .fillInTheBlank,
+                    prompt: blank,
+                    options: [],
+                    correctAnswer: concept.title,
+                    explanation: "Use the surrounding meaning to recover the missing concept.",
+                    keywords: [concept.title]
+                )
+            )
+        }
+
+        if conceptItems.count >= 2 {
+            let first = conceptItems[0]
+            let second = conceptItems[1]
+            questions.append(
+                StudyQuizQuestion(
+                    type: .comparison,
+                    prompt: "Compare \(first.title) and \(second.title). How are they related or different?",
+                    options: [],
+                    correctAnswer: relationshipAnswer(first: first, second: second, relationships: relationshipLookup),
+                    explanation: "A strong comparison links both ideas instead of listing them separately.",
+                    keywords: [first.title, second.title]
+                )
+            )
+        }
+
+        if let concept = conceptItems.dropFirst(2).first ?? conceptItems.first {
+            questions.append(
+                StudyQuizQuestion(
+                    type: .application,
+                    prompt: "How would you use \(concept.title) in a new example or problem?",
+                    options: [],
+                    correctAnswer: applicationAnswer(from: concept.summary, concept: concept.title),
+                    explanation: "Application questions test transfer, not recognition.",
+                    keywords: [concept.title]
+                )
+            )
+        }
+
+        if let concept = conceptItems.dropFirst(3).first ?? conceptItems.first {
+            questions.append(
+                StudyQuizQuestion(
+                    type: .conceptualUnderstanding,
+                    prompt: "Why does \(concept.title) matter in the bigger topic?",
+                    options: [],
+                    correctAnswer: concept.summary,
+                    explanation: "This checks whether you can explain the concept in context.",
+                    keywords: [concept.title]
+                )
+            )
+        }
+
+        if let concept = conceptItems.dropFirst(4).first ?? conceptItems.first {
             questions.append(
                 StudyQuizQuestion(
                     type: .shortAnswer,
-                    prompt: "In your own words, explain \(displayConcept(concept)).",
+                    prompt: "In your own words, explain \(concept.title) and connect it to the note.",
                     options: [],
-                    correctAnswer: quizShortAnswer(from: supportingSentence, concept: concept),
-                    explanation: "A strong answer should define the term and connect it back to the note.",
-                    keywords: [concept]
+                    correctAnswer: concept.summary,
+                    explanation: "Use a concise but complete explanation.",
+                    keywords: [concept.title]
                 )
             )
         }
 
-        return StudyQuizSet(title: "Quiz Generator - \(noteLabel)", questions: questions)
+        return StudyQuizSet(title: "Quiz Generator - \(noteLabel)", questions: Array(questions.prefix(8)))
     }
 
     func buildSummaryPack(from text: String) -> StudySummaryPack {
-        let concepts = extractConceptCandidates(from: text, limit: 8)
-        let sentences = splitSentences(text)
-        let executive = sentences.prefix(3).map { "• \($0.trimmingCharacters(in: .whitespacesAndNewlines))" }.joined(separator: "\n")
-        let detailed = buildDetailedSummary(from: text, concepts: concepts, sentences: sentences)
-        let exam = buildExamRevisionSummary(from: text, concepts: concepts)
+        let knowledge = cachedStudyKnowledgeSnapshot(from: text)
+        let executiveLines = [
+            "Title",
+            knowledge.title,
+            "Top ideas",
+            summaryBulletList(knowledge.summaryHighlights, emptyText: "No strong ideas identified yet."),
+            "Key terms",
+            summaryBulletList(knowledge.keyTerms.prefix(5).map(\.title), emptyText: "No key terms identified yet.")
+        ]
+        let executive = structuredSummaryBlock(title: "Executive", lines: executiveLines)
+
+        let detailedLines = [
+            "Overview",
+            summaryParagraph(from: splitSentences(knowledge.cleanedText)),
+            "Core ideas",
+            summaryBulletList(knowledge.concepts.prefix(5).map { "\($0.title) - \($0.summary)" }, emptyText: "No core ideas identified yet."),
+            "Definitions",
+            summaryBulletList(knowledge.definitions.prefix(5).map { "\($0.title) - \($0.summary)" }, emptyText: "No definitions identified yet."),
+            "Important relationships",
+            summaryBulletList(knowledge.relationships.prefix(5).map { "\($0.sourceTitle) \(relationshipLabel(for: $0.relation)) \( $0.targetTitle)" }, emptyText: "No relationships identified yet."),
+            "Examples",
+            summaryBulletList(knowledge.examples.prefix(3).map { "\($0.title) - \($0.summary)" }, emptyText: "No examples identified yet.")
+        ]
+        let detailed = structuredSummaryBlock(title: "Detailed", lines: detailedLines)
+
+        let revisionLines = [
+            "Exam focus",
+            summaryBulletList(Array(knowledge.examFocus.prefix(6)), emptyText: "No exam focus identified yet."),
+            "Definitions",
+            summaryBulletList(knowledge.definitions.prefix(4).map { "\($0.title): \($0.summary)" }, emptyText: "No definitions identified yet."),
+            "Formulas and procedures",
+            summaryBulletList((knowledge.formulas.prefix(2).map { $0.summary }) + (knowledge.procedures.prefix(2).map { $0.summary }), emptyText: "No formulas or procedures identified yet."),
+            "Common mistakes",
+            summaryBulletList(knowledge.misconceptions.prefix(4).map { "\($0.title) - \($0.summary)" }, emptyText: "No common mistakes identified yet."),
+            "Quick review",
+            summaryBulletList(Array(knowledge.summaryHighlights.prefix(5)), emptyText: "No quick review points identified yet.")
+        ]
+        let exam = structuredSummaryBlock(title: "Revision", lines: revisionLines)
         return StudySummaryPack(executiveSummary: executive, detailedSummary: detailed, examRevisionSummary: exam)
     }
 
     func buildKeyConceptInsights(from text: String, notebookText: String) -> StudyInsights {
-        let concepts = extractConceptCandidates(from: text, limit: 10)
-        let notebookConcepts = extractNotebookConcepts(from: notebookText)
-        let conceptCounts = conceptFrequency(in: text)
-
+        let knowledge = cachedStudyKnowledgeSnapshot(from: text)
+        let notebookKnowledge = extractedStudyKnowledgeSnapshot(
+            noteTitle: "Student Notes",
+            noteText: notebookText,
+            notebookText: "",
+            signature: studyKnowledgeSignature(noteTitle: "Student Notes", noteText: notebookText, notebookText: "")
+        )
+        let notebookLookup = Set(notebookKnowledge.concepts.map(\.title).map(normalizeConceptKey))
+        let rankedConcepts = knowledge.concepts.sorted { $0.importance > $1.importance }
+        let repeatedConcepts = rankedConcepts.filter { $0.importance >= 0.55 }
         return StudyInsights(
-            keyConcepts: Array(concepts.prefix(8)),
-            importantConcepts: concepts.filter { conceptCounts[normalizeConceptKey($0), default: 0] >= 2 }.prefix(5).map { $0 },
-            frequentTerms: Array(conceptCounts.sorted { $0.value > $1.value }.prefix(6).map { StudyTerm(term: displayConcept($0.key), count: $0.value) }),
-            potentialExamTopics: buildExamTopics(from: text),
-            knowledgeGaps: notebookConcepts
-                .filter { conceptCounts[normalizeConceptKey($0), default: 0] == 0 }
-                .prefix(5)
-                .map { $0 }
+            keyConcepts: Array(rankedConcepts.prefix(8).map(\.title)),
+            importantConcepts: Array(repeatedConcepts.prefix(5).map(\.title)),
+            frequentTerms: Array(rankedConcepts.prefix(6).enumerated().map { index, item in
+                StudyTerm(term: item.title, count: max(1, Int((item.importance * 10).rounded()) - index))
+            }),
+            potentialExamTopics: knowledge.examFocus.prefix(6).map { $0 },
+            knowledgeGaps: notebookKnowledge.concepts
+                .filter { !Set(knowledge.concepts.map(\.title).map(normalizeConceptKey)).contains(normalizeConceptKey($0.title)) && !notebookLookup.contains(normalizeConceptKey($0.title)) }
+                .prefix(6)
+                .map(\.title)
         )
     }
 
+    private func extractedStructuredKnowledge(
+        noteTitle: String,
+        noteText: String,
+        notebookText: String,
+        signature: String
+    ) -> StructuredKnowledge {
+        if let cached = KnowledgeExtractionCache.shared.cachedKnowledge(for: signature) {
+            return cached
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var extracted: StructuredKnowledge?
+
+        Task {
+            let run = await KnowledgeExtractionEngine.shared.extractRun(
+                noteTitle: noteTitle,
+                noteText: noteText,
+                notebookText: notebookText
+            )
+            extracted = run.knowledge
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+
+        if let extracted {
+            KnowledgeExtractionCache.shared.store(extracted, for: signature)
+            return extracted
+        }
+
+        return StructuredKnowledge(metadata: KnowledgeMetadata(title: noteTitle, sourceSignature: signature), title: noteTitle)
+    }
+
     func buildExamPrep(from text: String) -> StudyExamPrep {
-        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 10))
+        let knowledge = cachedStudyKnowledgeSnapshot(from: text)
         return StudyExamPrep(
-            likelyTopics: buildExamTopics(from: text),
-            condensedRevisionGuide: buildExamRevisionSummary(from: text, concepts: concepts),
+            likelyTopics: knowledge.examFocus.prefix(6).map { $0 },
+            condensedRevisionGuide: summaryText(for: buildSummaryPack(from: text), mode: .revision),
             practiceQuestions: Array(buildQuizSet(from: text).questions.prefix(6)),
-            difficultConcepts: concepts.prefix(4).map(displayConcept)
+            difficultConcepts: knowledge.formulas.prefix(2).map(\.title) + knowledge.prerequisites.prefix(2).map(\.title)
         )
     }
 
     func buildConceptMap(from text: String) -> [StudyConceptNode] {
-        let sentences = splitSentences(text)
-        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 12))
-        let trimmedTitle = noteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let root = concepts.first ?? (trimmedTitle.isEmpty ? nil : trimmedTitle) else { return [] }
+        let signature = studyKnowledgeSignature(noteTitle: noteLabel, noteText: text, notebookText: notebookCombinedText)
+        let structuredKnowledge = extractedStructuredKnowledge(
+            noteTitle: noteLabel,
+            noteText: text,
+            notebookText: notebookCombinedText,
+            signature: signature
+        )
+        guard !structuredKnowledge.relationships.isEmpty else { return [] }
 
-        let children = concepts.dropFirst().prefix(5).map { concept in
-            let related = sentences
-                .filter { $0.lowercased().contains(concept.lowercased()) }
-                .flatMap { extractConceptCandidates(from: $0, limit: 4) }
-                .filter { normalizeConceptKey($0) != normalizeConceptKey(concept) }
-            return StudyConceptNode(
-                title: displayConcept(concept),
-                children: dedupeStrings(Array(related.prefix(2))).map { StudyConceptNode(title: displayConcept($0), children: []) }
-            )
+        let titleByID = structuredKnowledge.concepts.reduce(into: [String: String]()) { result, concept in
+            result[concept.id] = concept.name
+        }
+        let outgoing = Dictionary(grouping: structuredKnowledge.relationships, by: { $0.sourceID })
+        let incoming = Set(structuredKnowledge.relationships.map(\.targetID))
+        let roots = structuredKnowledge.concepts.map(\.id).filter { !incoming.contains($0) }
+
+        func renderNode(id: String, visited: inout Set<String>) -> StudyConceptNode {
+            let title = titleByID[id] ?? id
+            guard visited.insert(id).inserted else {
+                return StudyConceptNode(title: title, children: [])
+            }
+            let children = outgoing[id, default: []].map { renderNode(id: $0.targetID, visited: &visited) }
+            return StudyConceptNode(title: title, children: children)
         }
 
-        return [StudyConceptNode(title: displayConcept(root), children: Array(children))]
+        return roots.prefix(5).map { root in
+            var visited = Set<String>()
+            return renderNode(id: root, visited: &visited)
+        }
     }
 
     func buildActiveRecallPrompts(from text: String) -> [StudyActiveRecallPrompt] {
-        let concepts = dedupeStrings(extractConceptCandidates(from: text, limit: 10))
-        let sentences = splitSentences(text)
-        guard !concepts.isEmpty, !sentences.isEmpty else { return [] }
-
-        let rankedSentences = sentences.sorted { lhs, rhs in
-            scoreRecallSentence(lhs, concepts: concepts) > scoreRecallSentence(rhs, concepts: concepts)
-        }
-
+        let knowledge = cachedStudyKnowledgeSnapshot(from: text)
+        guard !knowledge.concepts.isEmpty else { return [] }
         var prompts: [StudyActiveRecallPrompt] = []
         var seenQuestions = Set<String>()
 
-        for concept in concepts.prefix(5) {
-            let conceptLower = concept.lowercased()
-            let sentence = rankedSentences.first(where: { $0.lowercased().contains(conceptLower) })
-                ?? sentences.first(where: { $0.lowercased().contains(conceptLower) })
-                ?? rankedSentences.first
-
-            guard let sentence else { continue }
-
-            let promptText = activeRecallQuestion(for: concept, sentence: sentence)
+        for concept in knowledge.concepts.prefix(4) {
+            let promptText = activeRecallQuestion(for: concept.title, sentence: concept.summary)
             guard seenQuestions.insert(promptText.lowercased()).inserted else { continue }
 
             prompts.append(
                 StudyActiveRecallPrompt(
                     prompt: promptText,
-                    answer: condensedAnswer(from: sentence, for: concept),
-                    hiddenText: sentenceFragment(sentence)
+                    answer: concept.summary,
+                    hiddenText: concept.evidence.first ?? concept.summary
                 )
             )
         }
@@ -722,36 +1512,30 @@ private extension StudyView {
     }
 
     func buildNotebookKnowledgeGaps(currentNoteText: String) -> [StudyKnowledgeGap] {
-        let currentConcepts = Set(extractConceptCandidates(from: currentNoteText, limit: 20).map(normalizeConceptKey))
+        let currentKnowledge = cachedStudyKnowledgeSnapshot(from: currentNoteText)
         let notebookConceptCounts = notebookConceptFrequency
-        let currentNoteLower = currentNoteText.lowercased()
+        let currentKeys = Set(currentKnowledge.concepts.map { normalizeConceptKey($0.title) })
         var gaps: [StudyKnowledgeGap] = []
 
-        for (topic, prerequisites) in prerequisiteMap {
-            guard currentNoteLower.contains(topic) || currentConcepts.contains(normalizeConceptKey(topic)) else { continue }
-            for prerequisite in prerequisites where !currentConcepts.contains(normalizeConceptKey(prerequisite)) {
-                let relatedCount = notebookConceptCounts[normalizeConceptKey(prerequisite), default: 0]
-                if relatedCount > 0 || notebookConceptCounts[normalizeConceptKey(topic), default: 0] > 0 {
-                    gaps.append(
-                        StudyKnowledgeGap(
-                            title: "Missing prerequisite: \(displayConcept(prerequisite))",
-                            description: "You mention \(displayConcept(topic)), but the note does not explain \(displayConcept(prerequisite)).",
-                            evidence: "Notebook-wide context suggests \(displayConcept(prerequisite)) is a recurring prerequisite.",
-                            priority: Double(max(relatedCount, 1)) + 0.5
-                        )
-                    )
-                }
-            }
-        }
-
-        for (topic, count) in notebookConceptCounts.sorted(by: { $0.value > $1.value }).prefix(8) where count >= 2 {
-            guard !currentConcepts.contains(topic) else { continue }
+        for (topic, count) in notebookConceptCounts.sorted(by: { $0.value > $1.value }).prefix(10) where count >= 2 {
+            guard !currentKeys.contains(topic) else { continue }
             gaps.append(
                 StudyKnowledgeGap(
-                    title: "Recurring gap: \(displayConcept(topic))",
-                    description: "This appears across the notebook, but the active note does not cover it yet.",
-                    evidence: "Referenced in \(count) notes.",
+                    title: "Review \(displayConcept(topic))",
+                    description: "This idea appears repeatedly in the notebook but is not captured in the active note.",
+                    evidence: "Referenced across \(count) notes.",
                     priority: Double(count)
+                )
+            )
+        }
+
+        for prerequisite in currentKnowledge.prerequisites.prefix(4) where !currentKeys.contains(normalizeConceptKey(prerequisite.title)) {
+            gaps.append(
+                StudyKnowledgeGap(
+                    title: prerequisite.title,
+                    description: prerequisite.summary,
+                    evidence: prerequisite.evidence.first ?? "Missing from the active note.",
+                    priority: max(1.0, prerequisite.importance * 5.0)
                 )
             )
         }
@@ -760,67 +1544,65 @@ private extension StudyView {
     }
 
     func supplementalSection(for section: SupplementalStudySection) -> AnyView {
-        let isExpanded = activeSupplementalSection == section
+        let isExpanded = isSupplementalSectionExpanded(section)
 
         return AnyView(
-            VStack(alignment: .leading, spacing: 12) {
-            Button {
-                withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
-                    activeSupplementalSection = Self.toggledSupplementalSection(
-                        activeSection: activeSupplementalSection,
-                        section: section
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    toggleSupplementalSection(section)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: section.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(toolTint(forSupplemental: section))
+                            .frame(width: 30, height: 30)
+                            .background(toolTint(forSupplemental: section).opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(section.rawValue)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text(supplementalSubtitle(for: section))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(Color.studySurfaceRaised)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Color.studyBorderSoft, lineWidth: 1)
                     )
                 }
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: section.icon)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(toolTint(forSupplemental: section))
-                        .frame(width: 28, height: 28)
-                        .background(toolTint(forSupplemental: section).opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(section.rawValue)
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                .accessibilityHint("Toggle this study section.")
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(section.rawValue)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        Text(supplementalSubtitle(for: section))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    Spacer()
-
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                if isExpanded {
+                    supplementalSectionContent(for: section)
+                        .padding(.leading, 6)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-                .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
-                .padding(14)
-                .background(Color.studySurfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.studyBorderSoft, lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(section.rawValue)
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityHint("Toggle this study section.")
-
-            if isExpanded {
-                supplementalSectionContent(for: section)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
             }
         )
     }
 
     func supplementalSectionContent(for section: SupplementalStudySection) -> AnyView {
         switch section {
+        case .teachMe:
+            return AnyView(teachMeSection)
         case .learningMemory:
             return AnyView(learningMemorySection)
         case .knowledgeGaps:
@@ -835,6 +1617,96 @@ private extension StudyView {
             return AnyView(activeRecallSection)
         case .streaks:
             return AnyView(streaksSection)
+        }
+    }
+
+    private var teachMeSection: some View {
+        let session = studyData.teachMeSession ?? TeachMeSession()
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                statPill(title: "State", value: teachMeStateLabel(session.state))
+                statPill(title: "Concept", value: session.activeConceptName ?? "None")
+            }
+
+            if let question = session.activeQuestion {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(question.conceptName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(question.question)
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let gap = question.originatingKnowledgeGap, !gap.isEmpty {
+                        Text("Gap: \(gap)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let source = question.sourceReferences.first {
+                        Text("Source: \(source.noteTitle)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.studySurface)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                emptyCompactState(
+                    title: "No active Teach Me question",
+                    message: "Start from a knowledge gap, confusing concept, weak mastery item, or the current selection."
+                )
+            }
+
+            switch session.state {
+            case .idle, .complete:
+                HStack(spacing: 8) {
+                    quickAction("Start", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "play.fill") {
+                        startTeachMeSession()
+                    }
+                    if session.state == .complete {
+                        quickAction("Reset", tint: Color.textSecondary, icon: "arrow.counterclockwise") {
+                            persistTeachMeSession(TeachMeSession())
+                        }
+                    }
+                }
+            case .question:
+                quickAction("Answer", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "square.and.pencil") {
+                    persistTeachMeSession(TeachMeEngine().beginAnswering(session))
+                }
+            case .answering:
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $teachMeDraftAnswer)
+                        .font(.body)
+                        .frame(minHeight: 88)
+                        .padding(8)
+                        .background(Color.studySurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    quickAction("Submit", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "checkmark") {
+                        submitTeachMeAnswer()
+                    }
+                    .disabled(teachMeDraftAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            case .feedback:
+                if let response = session.answerHistory.last {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(teachMeEvaluationTitle(response.evaluation))
+                            .font(.subheadline.weight(.semibold))
+                        Text(response.feedback)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.studySurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                quickAction("Continue", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "arrow.right") {
+                    advanceTeachMeSession()
+                }
+            }
         }
     }
 
@@ -1056,7 +1928,12 @@ private extension StudyView {
                             content: noteText,
                             updatedAt: lastUpdatedAt ?? Date()
                         )
-                        KnowledgeGraphManager.shared.generateGraph(note: snapshot)
+                        KnowledgeService.shared.ingest(note: KnowledgeIngestionRequest(
+                            noteID: snapshot.id,
+                            title: snapshot.title,
+                            content: snapshot.content,
+                            updatedAt: snapshot.updatedAt
+                        ))
                     } label: {
                         Text("Update Graph")
                             .font(.caption.weight(.semibold))
@@ -1206,6 +2083,9 @@ private extension StudyView {
                 quickAction("Open Insights", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "chart.line.uptrend.xyaxis") {
                     focusStudyTool(.learningInsights)
                 }
+                quickAction("Debug Extraction", tint: Color(red: 0.53, green: 0.34, blue: 0.71), icon: "wrench.and.screwdriver") {
+                    openKnowledgeExtractionDebugger()
+                }
             }
         }
     }
@@ -1245,29 +2125,111 @@ private extension StudyView {
         }
     }
 
-    private func conceptMapNode(_ node: StudyConceptNode, depth: Int) -> AnyView {
-        AnyView(
-            VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
-                Text(String(repeating: "    ", count: depth) + (depth == 0 ? node.title : "- \(node.title)"))
-                    .font(.system(.subheadline, design: .monospaced))
-                    .foregroundStyle(depth == 0 ? Color.textPrimary : .secondary)
-                Spacer()
+    private func conceptMapNode(_ node: StudyConceptNode, depth: Int, isLast: Bool = true) -> AnyView {
+        let isExpanded = depth == 0 || expandedConceptNodeIDs.contains(node.id) || node.children.isEmpty
+        let accent = depth == 0 ? Color(red: 0.27, green: 0.43, blue: 0.55) : Color(red: 0.24, green: 0.49, blue: 0.59)
+
+        return AnyView(
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    if !node.children.isEmpty {
+                        if expandedConceptNodeIDs.contains(node.id) {
+                            expandedConceptNodeIDs.remove(node.id)
+                        } else {
+                            expandedConceptNodeIDs.insert(node.id)
+                        }
+                    }
+                } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(conceptTreePrefix(depth: depth, isLast: isLast))
+                            .font(.system(size: depth == 0 ? 15 : 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(depth == 0 ? accent : Color.textSecondary)
+                            .frame(minWidth: depth == 0 ? 28 : 34, alignment: .leading)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(node.title)
+                                    .font(depth == 0 ? .headline : .subheadline.weight(.semibold))
+                                    .foregroundStyle(Color.textPrimary)
+                                if !node.children.isEmpty {
+                                    Text("\(node.children.count)")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(accent)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(accent.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                            }
+
+                            if depth == 0 {
+                                Text("The root of the hierarchy and its major branches.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if !node.children.isEmpty {
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                Color.studySurfaceRaised,
+                                accent.opacity(depth == 0 ? 0.07 : 0.05)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: depth == 0 ? 18 : 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: depth == 0 ? 18 : 16, style: .continuous)
+                            .stroke(depth == 0 ? accent.opacity(0.24) : Color.studyBorderSoft, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .accessibilityLabel(node.title)
+                .accessibilityValue(node.children.isEmpty ? "Leaf node" : (isExpanded ? "Expanded" : "Collapsed"))
+                .accessibilityHint(node.children.isEmpty ? "Leaf concept" : "Toggle branch visibility")
+
+                if isExpanded && !node.children.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(node.children.enumerated()), id: \.element.id) { index, child in
+                            conceptMapNode(child, depth: depth + 1, isLast: index == node.children.count - 1)
+                        }
+                    }
+                    .padding(.leading, depth == 0 ? 12 : 18)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
-            ForEach(node.children) { child in
-                conceptMapNode(child, depth: depth + 1)
-            }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.studySurface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         )
+    }
+
+    private func conceptTreePrefix(depth: Int, isLast: Bool) -> String {
+        guard depth > 0 else { return "◉" }
+        let indent = String(repeating: "  ", count: max(0, depth - 1))
+        let connector = isLast ? "└─" : "├─"
+        return "\(indent)\(connector)"
     }
 
     func learningMemoryText(from memory: [StudyMemoryEntry]) -> String {
         guard !memory.isEmpty else {
-            return "No learning memory yet.\nGenerate flashcards, quizzes, or active recall prompts to begin tracking mastery."
+            return structuredSummaryBlock(
+                title: "Learning Memory",
+                lines: [
+                    "No learning memory yet.",
+                    "Generate flashcards, quizzes, or active recall prompts to begin tracking mastery."
+                ]
+            )
         }
 
         let sorted = memory.sorted(by: { lhs, rhs in
@@ -1277,34 +2239,64 @@ private extension StudyView {
             return lhs.masteryScore > rhs.masteryScore
         })
 
-        return sorted.enumerated().map { index, entry in
-            [
-                "\(index + 1). \(entry.concept)",
-                "Mastered: \(entry.masteredCount)",
-                "Missed: \(entry.missedCount)",
-                "Mastery Score: \(Int((entry.masteryScore * 100).rounded()))%",
-                "Last Review: \(entry.lastReviewedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Never")",
-                "Review History: \(entry.reviewHistory.isEmpty ? "None yet" : entry.reviewHistory.map { $0.formatted(date: .abbreviated, time: .shortened) }.joined(separator: ", "))"
-            ]
-            .joined(separator: "\n")
+        let strengths = sorted.filter { $0.masteryScore >= 0.7 }.prefix(4).map { entry in
+            "\(entry.concept) - \(Int((entry.masteryScore * 100).rounded()))% mastery"
         }
-        .joined(separator: "\n\n")
+        let needsReview = sorted.filter { $0.masteryScore < 0.7 }.prefix(4).map { entry in
+            "\(entry.concept) - \(entry.missedCount) miss\(entry.missedCount == 1 ? "" : "es")"
+        }
+        let recentHistory = sorted.prefix(4).map { entry in
+            let lastReview = entry.lastReviewedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Never"
+            return "\(entry.concept) | Last review: \(lastReview)"
+        }
+
+        return structuredSummaryBlock(
+            title: "Learning Memory",
+            lines: [
+                "Mastered concepts",
+                summaryBulletList(Array(strengths), emptyText: "No mastered concepts yet."),
+                "Needs review",
+                summaryBulletList(Array(needsReview), emptyText: "No concepts need review yet."),
+                "Recent review history",
+                summaryBulletList(Array(recentHistory), emptyText: "No review history yet.")
+            ]
+        )
     }
 
     func notebookGapsText(from gaps: [StudyKnowledgeGap]) -> String {
-        guard !gaps.isEmpty else { return "No notebook gaps detected yet." }
-        return gaps.map { "\($0.title)\n\($0.description)\nEvidence: \($0.evidence)\nPriority: \($0.priority)" }.joined(separator: "\n\n")
+        guard !gaps.isEmpty else {
+            return structuredSummaryBlock(
+                title: "Knowledge Gaps",
+                lines: ["No notebook gaps detected yet."]
+            )
+        }
+
+        let orderedGaps = gaps.sorted { $0.priority > $1.priority }
+        return structuredSummaryBlock(
+            title: "Knowledge Gaps",
+            lines: orderedGaps.prefix(6).enumerated().flatMap { index, gap in
+                [
+                    "\(index + 1). \(gap.title)",
+                    gap.description,
+                    "Evidence: \(gap.evidence)",
+                    "Priority: \(String(format: "%.1f", gap.priority))"
+                ]
+            }
+        )
     }
 
     func conceptMapText(from map: [StudyConceptNode]) -> String {
         guard let root = map.first else { return "No concept map yet." }
-        return conceptMapText(root, depth: 0)
+        return conceptMapText(root, depth: 0, isLast: true)
     }
 
-    func conceptMapText(_ node: StudyConceptNode, depth: Int) -> String {
-        let prefix = String(repeating: "  ", count: depth)
-        let line = depth == 0 ? node.title : "\(prefix)- \(node.title)"
-        return ([line] + node.children.map { conceptMapText($0, depth: depth + 1) }).joined(separator: "\n")
+    func conceptMapText(_ node: StudyConceptNode, depth: Int, isLast: Bool) -> String {
+        let prefix = conceptTreePrefix(depth: depth, isLast: isLast)
+        let label = depth == 0 ? node.title : "\(prefix) \(node.title)"
+        let children = node.children.enumerated().map { index, child in
+            conceptMapText(child, depth: depth + 1, isLast: index == node.children.count - 1)
+        }
+        return ([label] + children).joined(separator: "\n")
     }
 
     func activeRecallText(from prompts: [StudyActiveRecallPrompt]) -> String {
@@ -1341,7 +2333,10 @@ private extension StudyView {
         [
             StudyArtifactSection(
                 title: "Completeness Score",
-                body: "\(analysis.scorePercent)%\n\(analysis.summary)"
+                body: [
+                    "\(analysis.scorePercent)%",
+                    analysis.summary
+                ].joined(separator: "\n")
             ),
             StudyArtifactSection(
                 title: "Missing Concepts",
@@ -1364,9 +2359,9 @@ private extension StudyView {
         return cards.enumerated().map { index, card in
             [
                 "\(index + 1). \(card.type.title)",
-                "Front:",
+                "Front",
                 card.front,
-                "Back:",
+                "Back",
                 card.back,
                 card.whyItMatters.isEmpty ? nil : "Context: \(card.whyItMatters)"
             ]
@@ -1378,10 +2373,11 @@ private extension StudyView {
 
     func flashcardCardText(_ card: StudyFlashcard) -> String {
         [
+            card.type.title,
+            "Front",
             card.front,
-            "",
+            "Back",
             card.back,
-            card.whyItMatters.isEmpty ? nil : "",
             card.whyItMatters.isEmpty ? nil : "Context: \(card.whyItMatters)"
         ]
         .compactMap { $0 }
@@ -1408,7 +2404,7 @@ private extension StudyView {
     func flashcardSections(from cards: [StudyFlashcard]) -> [StudyArtifactSection] {
         cards.enumerated().map { index, card in
             StudyArtifactSection(
-                title: "Card \(index + 1) - \(card.type.title)",
+                title: "Card \(index + 1) · \(card.type.title)",
                 body: [
                     "Front",
                     card.front,
@@ -1427,13 +2423,15 @@ private extension StudyView {
     func quizSetText(from quizSet: StudyQuizSet) -> String {
         guard !quizSet.questions.isEmpty else { return "No quiz questions available yet." }
 
-        return [
-            quizSet.title,
-            quizSet.questions.enumerated().map { index, question in
+        let grouped = Dictionary(grouping: quizSet.questions) { $0.type }
+        let orderedTypes = StudyQuizQuestionType.allCases.filter { grouped[$0] != nil }
+        var sections: [String] = [quizSet.title]
+        for type in orderedTypes {
+            guard let questions = grouped[type] else { continue }
+            let renderedQuestions = questions.enumerated().map { index, question in
                 [
-                    "\(index + 1). \(question.type.title)",
-                    question.prompt,
-                    question.type == .multipleChoice && !question.options.isEmpty ? "Options: \(question.options.joined(separator: " | "))" : nil,
+                    "\(index + 1). \(question.prompt)",
+                    question.options.isEmpty ? nil : "Options: \(question.options.joined(separator: " | "))",
                     "Answer: \(question.correctAnswer)",
                     question.explanation.isEmpty ? nil : "Explanation: \(question.explanation)",
                     question.keywords.isEmpty ? nil : "Keywords: \(question.keywords.joined(separator: ", "))"
@@ -1441,19 +2439,20 @@ private extension StudyView {
                 .compactMap { $0 }
                 .joined(separator: "\n")
             }
-            .joined(separator: "\n\n")
-        ]
-        .joined(separator: "\n\n")
+            sections.append("")
+            sections.append(type.title)
+            sections.append(renderedQuestions.joined(separator: "\n\n"))
+        }
+        return sections.joined(separator: "\n")
     }
 
     func quizSections(from quizSet: StudyQuizSet) -> [StudyArtifactSection] {
-        let mcq = quizSet.questions.filter { $0.type == .multipleChoice }
-        let shortAnswer = quizSet.questions.filter { $0.type == .shortAnswer }
-
-        return [
-            StudyArtifactSection(
-                title: "Multiple Choice Questions",
-                body: mcq.isEmpty ? "No multiple choice questions generated." : mcq.enumerated().map { index, question in
+        let grouped = Dictionary(grouping: quizSet.questions) { $0.type }
+        return StudyQuizQuestionType.allCases.compactMap { type in
+            guard let questions = grouped[type], !questions.isEmpty else { return nil }
+            return StudyArtifactSection(
+                title: type.title,
+                body: questions.enumerated().map { index, question in
                     [
                         "\(index + 1). \(question.prompt)",
                         question.options.isEmpty ? nil : "Options: \(question.options.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " | "))",
@@ -1463,20 +2462,8 @@ private extension StudyView {
                     .compactMap { $0 }
                     .joined(separator: "\n")
                 }.joined(separator: "\n\n")
-            ),
-            StudyArtifactSection(
-                title: "Short Answer Questions",
-                body: shortAnswer.isEmpty ? "No short answer questions generated." : shortAnswer.enumerated().map { index, question in
-                    [
-                        "\(index + 1). \(question.prompt)",
-                        "Answer: \(question.correctAnswer)",
-                        question.explanation.isEmpty ? nil : "Explanation: \(question.explanation)"
-                    ]
-                    .compactMap { $0 }
-                    .joined(separator: "\n")
-                }.joined(separator: "\n\n")
             )
-        ]
+        }
     }
 
     func summaryText(for summaryPack: StudySummaryPack, mode: StudySummaryMode) -> String {
@@ -1492,44 +2479,45 @@ private extension StudyView {
 
     func summarySections(from summaryPack: StudySummaryPack) -> [StudyArtifactSection] {
         [
-            StudyArtifactSection(title: "Executive Summary", body: summaryPack.executiveSummary.isEmpty ? "No executive summary available yet." : summaryPack.executiveSummary),
-            StudyArtifactSection(title: "Detailed Summary", body: summaryPack.detailedSummary.isEmpty ? "No detailed summary available yet." : summaryPack.detailedSummary),
-            StudyArtifactSection(title: "Exam Revision Summary", body: summaryPack.examRevisionSummary.isEmpty ? "No revision summary available yet." : summaryPack.examRevisionSummary)
+            StudyArtifactSection(title: "Overview", body: summaryPack.executiveSummary.isEmpty ? "No executive summary available yet." : summaryPack.executiveSummary),
+            StudyArtifactSection(title: "Study Notes", body: summaryPack.detailedSummary.isEmpty ? "No detailed summary available yet." : summaryPack.detailedSummary),
+            StudyArtifactSection(title: "Exam Focus", body: summaryPack.examRevisionSummary.isEmpty ? "No revision summary available yet." : summaryPack.examRevisionSummary)
         ]
     }
 
     func keyConceptsText(from insights: StudyInsights) -> String {
         [
-            "Key Concepts",
-            insights.keyConcepts.isEmpty ? "None identified." : insights.keyConcepts.map { "- \($0)" }.joined(separator: "\n"),
+            "Core Concepts",
+            summaryBulletList(insights.keyConcepts, emptyText: "None identified."),
             "",
-            "Important Terms",
-            insights.importantConcepts.isEmpty ? "None identified." : insights.importantConcepts.map { "- \($0)" }.joined(separator: "\n"),
+            "Definitions",
+            summaryBulletList(insights.importantConcepts, emptyText: "None identified."),
             "",
             "Relationships",
-            insights.frequentTerms.isEmpty ? "None identified." : insights.frequentTerms.map { "- \($0.term) (\($0.count) references)" }.joined(separator: "\n"),
+            summaryBulletList(insights.frequentTerms.map { "\($0.term) (\($0.count) references)" }, emptyText: "None identified."),
             "",
-            "Suggested Review Topics",
-            insights.potentialExamTopics.isEmpty ? "None identified." : insights.potentialExamTopics.map { "- \($0)" }.joined(separator: "\n"),
+            "Exam Signals",
+            summaryBulletList(insights.potentialExamTopics, emptyText: "None identified."),
             "",
             "Knowledge Gaps",
-            insights.knowledgeGaps.isEmpty ? "None identified." : insights.knowledgeGaps.map { "- \($0)" }.joined(separator: "\n")
+            summaryBulletList(insights.knowledgeGaps, emptyText: "None identified.")
         ].joined(separator: "\n")
     }
 
     func keyConceptSections(from insights: StudyInsights) -> [StudyArtifactSection] {
         [
-            StudyArtifactSection(title: "Important Terms", body: insights.keyConcepts.isEmpty ? "None identified." : insights.keyConcepts.map { "- \($0)" }.joined(separator: "\n")),
-            StudyArtifactSection(title: "Definitions", body: insights.importantConcepts.isEmpty ? "None identified." : insights.importantConcepts.map { "- \($0)" }.joined(separator: "\n")),
-            StudyArtifactSection(title: "Relationships", body: insights.frequentTerms.isEmpty ? "None identified." : insights.frequentTerms.map { "- \($0.term) (\($0.count) references)" }.joined(separator: "\n")),
-            StudyArtifactSection(title: "Suggested Review Topics", body: insights.potentialExamTopics.isEmpty ? "None identified." : insights.potentialExamTopics.map { "- \($0)" }.joined(separator: "\n"))
+            StudyArtifactSection(title: "Core Concepts", body: summaryBulletList(insights.keyConcepts, emptyText: "None identified.")),
+            StudyArtifactSection(title: "Definitions", body: summaryBulletList(insights.importantConcepts, emptyText: "None identified.")),
+            StudyArtifactSection(title: "Relationships", body: summaryBulletList(insights.frequentTerms.map { "\($0.term) (\($0.count) references)" }, emptyText: "None identified.")),
+            StudyArtifactSection(title: "Exam Signals", body: summaryBulletList(insights.potentialExamTopics, emptyText: "None identified.")),
+            StudyArtifactSection(title: "Knowledge Gaps", body: summaryBulletList(insights.knowledgeGaps, emptyText: "None identified."))
         ]
     }
 
     func examPrepText(from prep: StudyExamPrep) -> String {
         [
             "Likely Topics",
-            prep.likelyTopics.isEmpty ? "None identified." : prep.likelyTopics.map { "- \($0)" }.joined(separator: "\n"),
+            summaryBulletList(prep.likelyTopics, emptyText: "None identified."),
             "",
             "Revision Guide",
             prep.condensedRevisionGuide.isEmpty ? "No revision guide generated yet." : prep.condensedRevisionGuide,
@@ -1547,13 +2535,13 @@ private extension StudyView {
             }.joined(separator: "\n\n"),
             "",
             "Difficult Concepts",
-            prep.difficultConcepts.isEmpty ? "None identified." : prep.difficultConcepts.map { "- \($0)" }.joined(separator: "\n")
+            summaryBulletList(prep.difficultConcepts, emptyText: "None identified.")
         ].joined(separator: "\n")
     }
 
     func examPrepSections(from prep: StudyExamPrep) -> [StudyArtifactSection] {
         [
-            StudyArtifactSection(title: "Likely Topics", body: prep.likelyTopics.isEmpty ? "None identified." : prep.likelyTopics.map { "- \($0)" }.joined(separator: "\n")),
+            StudyArtifactSection(title: "Likely Topics", body: summaryBulletList(prep.likelyTopics, emptyText: "None identified.")),
             StudyArtifactSection(title: "Condensed Revision Guide", body: prep.condensedRevisionGuide.isEmpty ? "No revision guide generated yet." : prep.condensedRevisionGuide),
             StudyArtifactSection(title: "Practice Questions", body: prep.practiceQuestions.isEmpty ? "None generated yet." : prep.practiceQuestions.enumerated().map { index, question in
                 [
@@ -1565,13 +2553,16 @@ private extension StudyView {
                 .compactMap { $0 }
                 .joined(separator: "\n")
             }.joined(separator: "\n\n")),
-            StudyArtifactSection(title: "Difficult Concepts", body: prep.difficultConcepts.isEmpty ? "None identified." : prep.difficultConcepts.map { "- \($0)" }.joined(separator: "\n"))
+            StudyArtifactSection(title: "Difficult Concepts", body: summaryBulletList(prep.difficultConcepts, emptyText: "None identified."))
         ]
     }
 
     func conceptMapSections(from map: [StudyConceptNode]) -> [StudyArtifactSection] {
         guard let root = map.first else { return [StudyArtifactSection(title: "Concept Map", body: "No concept map yet.")] }
-        return [StudyArtifactSection(title: "Concept Tree", body: conceptMapText(root, depth: 0))]
+        return [
+            StudyArtifactSection(title: "Hierarchy", body: conceptMapText(root, depth: 0, isLast: true)),
+            StudyArtifactSection(title: "Study Lens", body: conceptMapStudyLens(from: root))
+        ]
     }
 
     func activeRecallSections(from prompts: [StudyActiveRecallPrompt]) -> [StudyArtifactSection] {
@@ -1652,6 +2643,139 @@ private extension StudyView {
     func quizConceptCandidates(from quizSet: StudyQuizSet) -> [String] {
         quizSet.questions.flatMap { question in
             extractConceptCandidates(from: "\(question.prompt)\n\(question.correctAnswer)", limit: 3)
+        }
+    }
+
+    private func structuredSummaryBlock(title: String, lines: [String]) -> String {
+        ([title] + lines).joined(separator: "\n")
+    }
+
+    private func summaryBulletList(_ items: [String], emptyText: String) -> String {
+        guard !items.isEmpty else { return emptyText }
+        return items.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    private func summaryParagraph(from sentences: [String]) -> String {
+        let meaningful = sentences
+            .map { stripCitationMarkers($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(3)
+        guard !meaningful.isEmpty else {
+            return "No summary could be generated from the current note."
+        }
+        return meaningful.joined(separator: " ")
+    }
+
+    private func summaryOverviewLines(from sentences: [String], concepts: [String]) -> [String] {
+        let intro = summaryParagraph(from: sentences)
+        let focus = concepts.prefix(4).map(displayConcept)
+        return [
+            intro,
+            focus.isEmpty ? "Focus: no dominant concept could be inferred." : "Focus: \(focus.joined(separator: ", "))"
+        ]
+    }
+
+    private func summaryKeyIdeaLines(from sentences: [String], concepts: [String]) -> [String] {
+        let candidates = sentences.prefix(4).enumerated().map { index, sentence in
+            "\(index + 1). \(sentenceFragment(stripCitationMarkers(sentence)))"
+        }
+        if candidates.isEmpty {
+            return concepts.prefix(4).map(displayConcept)
+        }
+        return candidates
+    }
+
+    private func summaryDefinitionLines(from concepts: [String], sentences: [String]) -> [String] {
+        let joinedText = sentences.joined(separator: " ")
+        return concepts.prefix(4).map { concept in
+            let sentence = sentenceContaining(concept, in: joinedText)
+            let fallback = sentences.first ?? concept
+            let resolved = sentence.isEmpty ? fallback : sentence
+            return "\(displayConcept(concept)): \(sentenceFragment(resolved))"
+        }
+    }
+
+    private func summaryRememberLines(from sentences: [String], concepts: [String]) -> [String] {
+        var lines: [String] = []
+        if let firstConcept = concepts.first {
+            lines.append("Anchor the note around \(displayConcept(firstConcept)).")
+        }
+        if let firstSentence = sentences.first {
+            lines.append("Re-read: \(sentenceFragment(stripCitationMarkers(firstSentence)))")
+        }
+        return lines
+    }
+
+    private func summaryMistakeLines(from sentences: [String], concepts: [String]) -> [String] {
+        guard let firstConcept = concepts.first else {
+            return ["Do not memorize isolated terms without the surrounding explanation."]
+        }
+        return [
+            "Avoid treating \(displayConcept(firstConcept)) as a standalone label.",
+            "Connect it to the surrounding explanation: \(sentenceFragment(bestSentence(for: firstConcept, in: sentences) ?? sentences.first ?? firstConcept))"
+        ]
+    }
+
+    private func summaryQuickReviewLines(from concepts: [String], sentences: [String]) -> [String] {
+        let joinedText = sentences.joined(separator: " ")
+        var lines: [String] = []
+        for concept in concepts.prefix(3) {
+            let sentence = sentenceContaining(concept, in: joinedText)
+            let fallback = sentences.first ?? concept
+            lines.append("\(displayConcept(concept)) - \(sentenceFragment(sentence.isEmpty ? fallback : sentence))")
+        }
+        return lines
+    }
+
+    private func conceptMapStudyLens(from root: StudyConceptNode) -> String {
+        let branches = root.children.prefix(4).map { $0.title }
+        guard !branches.isEmpty else {
+            return "No deeper branches were identified yet."
+        }
+        return [
+            "Root",
+            root.title,
+            "",
+            "Primary branches",
+            summaryBulletList(Array(branches), emptyText: "No primary branches.")
+        ].joined(separator: "\n")
+    }
+
+    private func comparisonAnswer(first: String, second: String, sentences: [String], concepts: [String]) -> String {
+        let joinedText = sentences.joined(separator: " ")
+        let firstSentence = concepts.first.map { sentenceContaining($0, in: joinedText) }.flatMap { $0.isEmpty ? nil : $0 } ?? sentences.first ?? first
+        let secondSentence = concepts.dropFirst().first.map { sentenceContaining($0, in: joinedText) }.flatMap { $0.isEmpty ? nil : $0 } ?? sentences.dropFirst().first ?? second
+        return "\(first) and \(second) are related because \(sentenceFragment(firstSentence)) while \(sentenceFragment(secondSentence))."
+    }
+
+    private func applicationAnswer(from sentence: String, concept: String) -> String {
+        let cleaned = sentenceFragment(stripCitationMarkers(sentence))
+        return "Apply \(displayConcept(concept)) by using it in a new context, for example: \(cleaned)"
+    }
+
+    private func relationshipAnswer(first: StudyKnowledgeItem, second: StudyKnowledgeItem, relationships: [StudyKnowledgeRelationship]) -> String {
+        if let link = relationships.first(where: {
+            ($0.sourceTitle == first.title && $0.targetTitle == second.title)
+            || ($0.sourceTitle == second.title && $0.targetTitle == first.title)
+        }) {
+            return "\(first.title) \(relationshipLabel(for: link.relation)) \(second.title) because \(first.summary.isEmpty ? first.title : first.summary)."
+        }
+
+        return "\(first.title) and \(second.title) belong to the same study cluster and should be connected in your explanation."
+    }
+
+    private func relationshipLabel(for relation: String) -> String {
+        switch relation {
+        case "dependsOn":
+            return "depends on"
+        case "leadsTo":
+            return "leads to"
+        case "illustrates":
+            return "illustrates"
+        case "contrastsWith":
+            return "contrasts with"
+        default:
+            return "is related to"
         }
     }
 
@@ -2004,6 +3128,8 @@ private extension StudyView {
 
     private func toolTint(forSupplemental section: SupplementalStudySection) -> Color {
         switch section {
+        case .teachMe:
+            return Color(red: 0.24, green: 0.49, blue: 0.59)
         case .learningMemory:
             return Color(red: 0.24, green: 0.49, blue: 0.59)
         case .knowledgeGaps:
@@ -2023,6 +3149,8 @@ private extension StudyView {
 
     private func supplementalSubtitle(for section: SupplementalStudySection) -> String {
         switch section {
+        case .teachMe:
+            return "Turn a gap into one short question and feedback."
         case .learningMemory:
             return "Track what feels solid and what still needs review."
         case .knowledgeGaps:
@@ -2037,6 +3165,32 @@ private extension StudyView {
             return "Hide the answer first, then reveal it only after you think."
         case .streaks:
             return "Keep lightweight study stats without clutter."
+        }
+    }
+
+    private func teachMeStateLabel(_ state: TeachMeSessionState) -> String {
+        switch state {
+        case .idle:
+            return "Idle"
+        case .question:
+            return "Question"
+        case .answering:
+            return "Answering"
+        case .feedback:
+            return "Feedback"
+        case .complete:
+            return "Complete"
+        }
+    }
+
+    private func teachMeEvaluationTitle(_ evaluation: TeachMeEvaluation) -> String {
+        switch evaluation {
+        case .correct:
+            return "Correct"
+        case .partiallyCorrect:
+            return "Partially Correct"
+        case .incorrect:
+            return "Needs Review"
         }
     }
 
@@ -2083,12 +3237,17 @@ struct StudyFlashcard: Identifiable, Codable, Equatable {
     var front: String
     var back: String
     var whyItMatters: String = ""
+    var conceptIDs: [String] = []
 }
 
 enum StudyQuizQuestionType: String, CaseIterable, Codable, Identifiable {
     case multipleChoice = "multiple_choice"
     case trueFalse = "true_false"
     case shortAnswer = "short_answer"
+    case fillInTheBlank = "fill_in_the_blank"
+    case conceptualUnderstanding = "conceptual_understanding"
+    case application = "application"
+    case comparison = "comparison"
 
     var id: String { rawValue }
 
@@ -2100,6 +3259,14 @@ enum StudyQuizQuestionType: String, CaseIterable, Codable, Identifiable {
             return "True / False"
         case .shortAnswer:
             return "Short Answer"
+        case .fillInTheBlank:
+            return "Fill in the Blank"
+        case .conceptualUnderstanding:
+            return "Conceptual Understanding"
+        case .application:
+            return "Application"
+        case .comparison:
+            return "Comparison"
         }
     }
 }
@@ -2112,6 +3279,7 @@ struct StudyQuizQuestion: Identifiable, Codable, Equatable {
     var correctAnswer: String
     var explanation: String = ""
     var keywords: [String] = []
+    var conceptIDs: [String] = []
 }
 
 struct StudyQuizSet: Identifiable, Codable, Equatable {
@@ -2128,6 +3296,7 @@ struct StudyTutorQuestion: Identifiable, Codable, Equatable {
     var keyPoints: [String] = []
     var explanation: String = ""
     var concept: String = ""
+    var conceptIDs: [String] = []
 }
 
 struct StudyTerm: Codable, Equatable, Identifiable {
@@ -2237,6 +3406,8 @@ struct NoteStudyData: Codable, Equatable {
     var insights: StudyInsights = StudyInsights()
     var learningInsights: LectureCompletenessAnalysis = LectureCompletenessAnalysis()
     var artifacts: [StudyArtifact] = []
+    var knowledgeSnapshot: StudyKnowledgeSnapshot = StudyKnowledgeSnapshot()
+    var knowledgeSignature: String = ""
     var progress: StudyProgress = StudyProgress()
     var learningMemory: [StudyMemoryEntry] = []
     var streaks: StudyStreakSummary = StudyStreakSummary()
@@ -2245,6 +3416,7 @@ struct NoteStudyData: Codable, Equatable {
     var conceptMap: [StudyConceptNode] = []
     var activeRecallPrompts: [StudyActiveRecallPrompt] = []
     var notebookKnowledgeGaps: [StudyKnowledgeGap] = []
+    var teachMeSession: TeachMeSession?
     var lastGeneratedAt: Date?
 }
 
@@ -2374,10 +3546,10 @@ enum StudyStatusTone {
 
 private enum StudyTool: String, CaseIterable, Identifiable {
     case learningInsights = "Learning Insights"
-    case flashcards = "Flashcards"
-    case quizGenerator = "Quiz Generator"
     case summaryGenerator = "Summary Generator"
     case keyConcepts = "Key Concepts"
+    case flashcards = "Flashcards"
+    case quizGenerator = "Quiz Generator"
 
     var id: String { rawValue }
 
@@ -2447,10 +3619,11 @@ private enum StudySummaryMode: String, CaseIterable, Identifiable {
 }
 
 enum SupplementalStudySection: String, CaseIterable, Identifiable {
+    case teachMe = "Teach Me"
+    case conceptMap = "Concept Map"
     case learningMemory = "Learning Memory"
     case knowledgeGaps = "Knowledge Gaps"
     case examPrep = "Exam Prep"
-    case conceptMap = "Concept Map"
     case knowledgeGraph = "Knowledge Graph"
     case activeRecall = "Active Recall"
     case streaks = "Study Streaks"
@@ -2459,6 +3632,8 @@ enum SupplementalStudySection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .teachMe:
+            return "graduationcap"
         case .learningMemory:
             return "memorychip"
         case .knowledgeGaps:
@@ -2515,8 +3690,12 @@ struct StudyView: View {
     @State private var isFlashcardInteractionLocked: Bool = false
     @State private var activeRecallIndex: Int = 0
     @State private var isActiveRecallAnswerRevealed: Bool = false
+    @State private var knowledgeExtractionDebuggerReport: KnowledgeExtractionDebugReport?
+    @State private var isShowingKnowledgeExtractionDebugger: Bool = false
     @State private var selectedSummaryMode: StudySummaryMode = .executive
-    @State private var activeSupplementalSection: SupplementalStudySection?
+    @State private var expandedSupplementalSections: Set<SupplementalStudySection> = []
+    @State private var expandedConceptNodeIDs: Set<UUID> = []
+    @State private var teachMeDraftAnswer: String = ""
     @State private var transientStatusMessage: String?
     @State private var studyScrollContentHeight: CGFloat = 0
     @State private var studyScrollViewportHeight: CGFloat = 0
@@ -2526,11 +3705,18 @@ struct StudyView: View {
         hasOverflow ? 180 : 72
     }
 
-    static func toggledSupplementalSection(
-        activeSection: SupplementalStudySection?,
-        section: SupplementalStudySection
-    ) -> SupplementalStudySection? {
-        activeSection == section ? nil : section
+    private func isSupplementalSectionExpanded(_ section: SupplementalStudySection) -> Bool {
+        expandedSupplementalSections.contains(section)
+    }
+
+    private func toggleSupplementalSection(_ section: SupplementalStudySection) {
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.92)) {
+            if expandedSupplementalSections.contains(section) {
+                expandedSupplementalSections.remove(section)
+            } else {
+                expandedSupplementalSections.insert(section)
+            }
+        }
     }
 
     private var noteLabel: String {
@@ -2684,6 +3870,8 @@ struct StudyView: View {
                     .onChange(of: noteID) { _, _ in
                         resetFlashcardSession()
                         isFlashcardInteractionLocked = false
+                        expandedSupplementalSections.removeAll()
+                        expandedConceptNodeIDs.removeAll()
                     }
                     .onChange(of: studyData.flashcards.map(\.id)) { _, _ in
                         syncFlashcardSession()
@@ -2702,6 +3890,21 @@ struct StudyView: View {
             guard noteHasContent, noteID != nil else { return }
             generateAllStudyMaterials()
             onAutoGenerateStudyMaterialsConsumed()
+        }
+        .sheet(isPresented: $isShowingKnowledgeExtractionDebugger) {
+            if let report = knowledgeExtractionDebuggerReport {
+                KnowledgeExtractionDebuggerView(report: report)
+            } else {
+                VStack(spacing: 12) {
+                    Text("No extraction debug data available.")
+                        .font(.headline)
+                    Text("Run the debugger from a note with content to inspect the raw chunk, prompt, and merged knowledge.")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .frame(minWidth: 520, minHeight: 320)
+            }
         }
     }
 
@@ -3522,8 +4725,9 @@ struct StudyView: View {
             }
 
             Text(body.isEmpty ? "Nothing generated yet." : body)
-                .font(.subheadline)
+                .font(.system(.subheadline, design: .rounded))
                 .foregroundStyle(.primary)
+                .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
 
             actionButtons(artifact: artifact, accent: accent, onRegenerate: onRegenerate)
@@ -3634,22 +4838,31 @@ struct StudyView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.headline)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
                 ForEach(items, id: \.self) { item in
-                    Text(item)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.textPrimary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(tint.opacity(0.08))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(tint.opacity(0.14), lineWidth: 0.8)
-                        )
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(tint)
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 5)
+
+                        Text(item)
+                            .font(.system(.callout, design: .rounded).weight(.semibold))
+                            .foregroundStyle(Color.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(tint.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(tint.opacity(0.18), lineWidth: 0.9)
+                    )
                 }
             }
         }

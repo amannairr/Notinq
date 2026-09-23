@@ -162,12 +162,28 @@ final class LlamaContext {
     }
 }
 
-final class LlamaProvider: AIProvider {
+final class LlamaProvider: AIProvider, GenerationModelProvider {
     static let shared = LlamaProvider()
 
     private let workQueue = DispatchQueue(label: "notinq.llama.provider.work", qos: .userInitiated)
 
     private init() {}
+
+    let kind: AIProviderKind = .localLlama
+    let displayName: String = "Local Llama"
+    let capabilities = AIProviderCapabilities(
+        canStream: true,
+        canCancel: true,
+        canGenerateJSON: true,
+        canUseGrammar: false,
+        canStructuredGenerate: true,
+        supportsChatTemplates: false,
+        contextLimits: AIContextLimits(
+            inputTokenLimit: Int(AIRuntimeConfig.current.llama.contextSize),
+            outputTokenLimit: Int(AIRuntimeConfig.current.llama.maxTokens),
+            preferredChunkTokenCount: max(256, Int(AIRuntimeConfig.current.llama.contextSize) / 2)
+        )
+    )
 
     private func cappedPrompt(_ prompt: String) -> String {
         let maxChars = max(1_800, Int(AIRuntimeConfig.current.llama.contextSize) * 3)
@@ -257,5 +273,56 @@ final class LlamaProvider: AIProvider {
                 completion()
             }
         }
+    }
+
+    func healthCheck() async -> AIProviderHealth {
+        AIProviderHealth(
+            isHealthy: PLLlamaBackendAvailable(),
+            message: PLLlamaBackendAvailable() ? "Local llama provider ready." : "llama.cpp backend unavailable.",
+            contextLimits: capabilities.contextLimits
+        )
+    }
+
+    func generate(_ request: AIGenerationRequest) async throws -> AIGenerationResult {
+        try await withCheckedThrowingContinuation { continuation in
+            let prompt = preparedPrompt(for: request)
+            run(prompt: prompt, maxTokens: request.maxTokens) { response in
+                continuation.resume(returning: AIGenerationResult(text: response, metrics: nil))
+            }
+        }
+    }
+
+    func stream(
+        _ request: AIGenerationRequest,
+        onToken: @escaping (String) -> Void
+    ) async throws -> AIGenerationResult {
+        try await withCheckedThrowingContinuation { continuation in
+            let prompt = preparedPrompt(for: request)
+            runStreaming(
+                prompt: prompt,
+                maxTokens: request.maxTokens,
+                onToken: onToken,
+                completion: {
+                    continuation.resume(returning: AIGenerationResult(text: "", metrics: nil))
+                }
+            )
+        }
+    }
+
+    func cancel() {
+        AIModelManager.shared.currentLlamaContext()?.cancelGeneration()
+    }
+
+    func jsonGenerate(_ request: AIGenerationRequest) async throws -> Data {
+        let result = try await generate(request)
+        return Data(result.text.utf8)
+    }
+
+    private func preparedPrompt(for request: AIGenerationRequest) -> String {
+        var prompt = request.prompt
+        if let systemPrompt = request.systemPrompt, !systemPrompt.isEmpty {
+            prompt = systemPrompt + "\n\n" + prompt
+        }
+        return cappedPrompt(prompt)
     }
 }

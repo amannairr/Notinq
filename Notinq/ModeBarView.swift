@@ -8,7 +8,7 @@
 import SwiftUI
 
 enum AppMode: String, CaseIterable {
-    case notes, ai, study, search
+    case dashboard, graph, notes, ai, study, search
 }
 
 struct ModeBarView: View {
@@ -29,6 +29,8 @@ struct ModeBarView: View {
 
             // Modes
             VStack(spacing: 16) {
+                ModeItem(icon: "chart.bar.xaxis", mode: .dashboard, selectedMode: $selectedMode)
+                ModeItem(icon: "point.3.connected.trianglepath.dotted", mode: .graph, selectedMode: $selectedMode)
                 ModeItem(icon: "note.text", mode: .notes, selectedMode: $selectedMode)
                 ModeItem(icon: "sparkles", mode: .ai, selectedMode: $selectedMode)
                 ModeItem(icon: "book", mode: .study, selectedMode: $selectedMode)
@@ -133,6 +135,12 @@ struct ModeItem: View {
         case .study:
             return "Study"
 
+        case .dashboard:
+            return "Learning Dashboard"
+
+        case .graph:
+            return "Knowledge Graph"
+
         case .search:
             return "Search"
         }
@@ -172,4 +180,3 @@ struct ModeUtilityButton: View {
         )
     }
 }
-
