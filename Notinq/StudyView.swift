@@ -151,6 +151,68 @@ private extension StudyView {
         }
     }
 
+    func generateSelectedStudyItem(_ action: StudyQuestionGenerationAction) {
+        guard let noteID else { return }
+        let source = selectedStudyQuestionSource(noteID: noteID)
+        guard !source.selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            transientStatusMessage = "Select or add note content first."
+            return
+        }
+
+        Task {
+            let output = await StudyQuestionGenerationEngine().generate(action: action, source: source)
+            await MainActor.run {
+                persistGeneratedStudyItem(output, action: action, noteID: noteID)
+            }
+        }
+    }
+
+    func selectedStudyQuestionSource(noteID: UUID) -> StudyQuestionGenerationSource {
+        let selected = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceText = selected.isEmpty ? noteContentSource : selected
+        let range = selected.isEmpty
+            ? NSRange(location: 0, length: (sourceText as NSString).length)
+            : NSRange(location: 0, length: (selected as NSString).length)
+        return StudyQuestionGenerationSource(
+            noteID: noteID,
+            selectedText: sourceText,
+            noteContext: noteText,
+            sourceRange: range
+        )
+    }
+
+    func persistGeneratedStudyItem(_ output: StudyQuestionGenerationOutput, action: StudyQuestionGenerationAction, noteID: UUID) {
+        let recorder = LearningSignalRecorder()
+        mutateStudyData { studyData in
+            if let flashcard = output.flashcard {
+                studyData.flashcards.insert(flashcard, at: 0)
+                updateStreaks(&studyData, notesReviewed: 0, flashcardsCompleted: 0, quizzesCompleted: 0)
+                recorder.recordStudyFlashcardGenerated(flashcard: flashcard, noteID: noteID)
+                flashcardIndex = 0
+                isFlashcardFlipped = false
+            }
+
+            if let question = output.question {
+                let generatedSetTitle = "Generated Questions"
+                if let index = studyData.quizSets.firstIndex(where: { $0.title == generatedSetTitle }) {
+                    studyData.quizSets[index].questions.insert(question, at: 0)
+                } else {
+                    studyData.quizSets.insert(
+                        StudyQuizSet(title: generatedSetTitle, questions: [question]),
+                        at: 0
+                    )
+                }
+                updateStreaks(&studyData, notesReviewed: 0, flashcardsCompleted: 0, quizzesCompleted: 0)
+                recorder.recordStudyQuestionGenerated(question: question, noteID: noteID)
+                generatedQuestionDraftAnswer = ""
+                isGeneratedQuestionAnswerRevealed = false
+            }
+        }
+
+        transientStatusMessage = "\(action.title) saved to study materials."
+        focusStudyTool(action == .generateFlashcard ? .flashcards : .quizGenerator)
+    }
+
     func generateQuizSet() {
         guard let noteID else { return }
         let structure = activeDocumentStructure
@@ -362,8 +424,17 @@ private extension StudyView {
                 existingStudyData: currentStudyData
             )
             await MainActor.run {
-                appState.updateStudyData(generated, for: noteID)
-                let gaps = generated.notebookKnowledgeGaps
+                var mergedStudyData = generated
+                let gaps = StudyKnowledgeGap.merge(existing: currentStudyData.notebookKnowledgeGaps, detected: generated.notebookKnowledgeGaps)
+                mergedStudyData.notebookKnowledgeGaps = gaps
+                appState.updateStudyData(mergedStudyData, for: noteID)
+                for gap in gaps where gap.status == .active {
+                    ResearchInstrumentationService.shared.recordKnowledgeGapDetected(
+                        concept: gap.title,
+                        heuristic: gap.detectionHeuristic,
+                        noteID: noteID
+                    )
+                }
                 let artifact = buildArtifact(
                     kind: .notebookKnowledgeGaps,
                     title: "Knowledge Gaps",
@@ -475,6 +546,27 @@ private extension StudyView {
         }
     }
 
+    func recordGeneratedQuestionAnswer(_ question: StudyQuizQuestion, isCorrect: Bool) {
+        guard let noteID else { return }
+        let answer = generatedQuestionDraftAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalAnswer = answer.isEmpty ? (isCorrect ? "Marked correct" : "Marked incorrect") : answer
+        let answeredQuestion = question.recordingAnswer(finalAnswer, isCorrect: isCorrect)
+        mutateStudyData { studyData in
+            for setIndex in studyData.quizSets.indices {
+                guard let questionIndex = studyData.quizSets[setIndex].questions.firstIndex(where: { $0.id == question.id }) else {
+                    continue
+                }
+                studyData.quizSets[setIndex].questions[questionIndex] = answeredQuestion
+                updateStreaks(&studyData, notesReviewed: 0, flashcardsCompleted: 0, quizzesCompleted: 1)
+                break
+            }
+        }
+        LearningSignalRecorder().recordStudyQuestionAnswered(question: answeredQuestion, isCorrect: isCorrect, noteID: noteID)
+        generatedQuestionDraftAnswer = ""
+        isGeneratedQuestionAnswerRevealed = false
+        transientStatusMessage = isCorrect ? "Marked question correct." : "Marked question for review."
+    }
+
     func persistStudySession(notesReviewed: Int = 1, flashcardsCompleted: Int = 0, quizzesCompleted: Int = 0) {
         mutateStudyData { studyData in
             updateStreaks(&studyData, notesReviewed: notesReviewed, flashcardsCompleted: flashcardsCompleted, quizzesCompleted: quizzesCompleted)
@@ -509,6 +601,7 @@ private extension StudyView {
         let manualConcept = extractConceptCandidates(from: noteContentSource, limit: 1).first ?? noteLabel
         let session = TeachMeEngine().startSession(
             adaptiveContext: context,
+            recommendedConcepts: teachMeRecommendedConcepts(),
             manualConcept: manualConcept
         )
         teachMeDraftAnswer = ""
@@ -555,6 +648,10 @@ private extension StudyView {
             .filter { $0.missedCount > $0.masteredCount }
             .sorted { $0.missedCount > $1.missedCount }
             .map(\.concept)
+        let weakConcepts = studyData.learningMemory
+            .filter { $0.masteryScore < 0.6 }
+            .sorted { $0.masteryScore < $1.masteryScore }
+            .map(\.concept)
         let masteryStates = Dictionary(
             studyData.learningMemory.map { entry in
                 (TeachMeEngine.conceptID(for: entry.concept), MasteryState.state(for: entry.masteryScore))
@@ -579,7 +676,8 @@ private extension StudyView {
 
         return AdaptiveExplanationContext(
             selectedText: selectedText,
-            conceptIDs: gapTitles.map(TeachMeEngine.conceptID(for:)),
+            conceptIDs: (gapTitles + weakConcepts + historicallyConfusing).map(teachMeConceptID),
+            weakConcepts: weakConcepts,
             identifiedKnowledgeGaps: gapTitles,
             historicallyConfusingConcepts: historicallyConfusing,
             masteryStates: masteryStates,
@@ -587,6 +685,36 @@ private extension StudyView {
             inferredLearnerLevel: "Study Session",
             confidence: gapTitles.isEmpty ? 0.35 : 0.7
         )
+    }
+
+    private func teachMeConceptID(for value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func teachMeRecommendedConcepts() -> [String] {
+        let planned = StudyPlannerService()
+            .dailyPlan(maxMinutes: 45)
+            .tasks
+            .map(\.concept)
+        let fallback = studyData.insights.knowledgeGaps
+            + studyData.insights.importantConcepts
+            + studyData.insights.keyConcepts
+        return uniqueTeachMeConcepts(planned + fallback)
+    }
+
+    private func uniqueTeachMeConcepts(_ concepts: [String]) -> [String] {
+        var seen: Set<String> = []
+        return concepts.filter { concept in
+            let key = concept
+                .lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { return false }
+            return seen.insert(key).inserted
+        }
     }
 
     func mutateStudyData(_ mutation: (inout NoteStudyData) -> Void) {
@@ -637,27 +765,23 @@ private extension StudyView {
             return cached.legacySnapshotRepresentation()
         }
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var extracted: StructuredKnowledge?
-
+        // Schedule non-blocking async extraction for future cache hits
         Task {
             let run = await KnowledgeExtractionEngine.shared.extractRun(
                 noteTitle: noteTitle,
                 noteText: noteText,
                 notebookText: notebookText
             )
-            extracted = run.knowledge
-            semaphore.signal()
+            KnowledgeExtractionCache.shared.store(run.knowledge, for: signature)
         }
 
-        semaphore.wait()
-
-        if let extracted {
-            KnowledgeExtractionCache.shared.store(extracted, for: signature)
-            return extracted.legacySnapshotRepresentation()
-        }
-
-        return StudyKnowledgeSnapshot(title: noteTitle, sourceSignature: signature)
+        // Return heuristic-based snapshot immediately instead of blocking
+        return buildStudyKnowledgeSnapshot(
+            noteTitle: noteTitle,
+            noteText: noteText,
+            notebookText: notebookText,
+            signature: signature
+        )
     }
 
     private func studyKnowledgeSignature(noteTitle: String, noteText: String, notebookText: String) -> String {
@@ -1424,24 +1548,14 @@ private extension StudyView {
             return cached
         }
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var extracted: StructuredKnowledge?
-
+        // Schedule non-blocking async extraction for future cache hits
         Task {
             let run = await KnowledgeExtractionEngine.shared.extractRun(
                 noteTitle: noteTitle,
                 noteText: noteText,
                 notebookText: notebookText
             )
-            extracted = run.knowledge
-            semaphore.signal()
-        }
-
-        semaphore.wait()
-
-        if let extracted {
-            KnowledgeExtractionCache.shared.store(extracted, for: signature)
-            return extracted
+            KnowledgeExtractionCache.shared.store(run.knowledge, for: signature)
         }
 
         return StructuredKnowledge(metadata: KnowledgeMetadata(title: noteTitle, sourceSignature: signature), title: noteTitle)
@@ -1541,6 +1655,61 @@ private extension StudyView {
         }
 
         return dedupeGaps(gaps).prefix(6).map { $0 }
+    }
+
+    func activeKnowledgeGaps() -> [StudyKnowledgeGap] {
+        let detected = buildNotebookKnowledgeGaps(currentNoteText: noteContentSource)
+        let source = studyData.notebookKnowledgeGaps.isEmpty
+            ? detected
+            : StudyKnowledgeGap.merge(existing: studyData.notebookKnowledgeGaps, detected: detected)
+        return source
+            .filter { $0.status == .active }
+            .sorted { lhs, rhs in
+                if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+    }
+
+    func updateKnowledgeGap(_ gap: StudyKnowledgeGap, status: StudyKnowledgeGapStatus, resolutionMethod: String? = nil) {
+        guard let noteID else { return }
+        appState.mutateStudyData(for: noteID) { studyData in
+            let detected = buildNotebookKnowledgeGaps(currentNoteText: noteContentSource)
+            var gaps = StudyKnowledgeGap.merge(existing: studyData.notebookKnowledgeGaps, detected: detected)
+            guard let index = gaps.firstIndex(where: { $0.normalizedKey == gap.normalizedKey }) else { return }
+            gaps[index].status = status
+            gaps[index].updatedAt = Date()
+            gaps[index].resolutionMethod = resolutionMethod
+            studyData.notebookKnowledgeGaps = gaps
+        }
+
+        switch status {
+        case .active:
+            break
+        case .ignored:
+            ResearchInstrumentationService.shared.recordKnowledgeGapIgnored(
+                concept: gap.title,
+                heuristic: gap.detectionHeuristic,
+                noteID: noteID
+            )
+            transientStatusMessage = "Ignored \(gap.title)."
+        case .resolved:
+            ResearchInstrumentationService.shared.recordKnowledgeGapResolved(
+                concept: gap.title,
+                resolutionMethod: resolutionMethod ?? "markedUnderstood",
+                noteID: noteID
+            )
+            transientStatusMessage = "Marked \(gap.title) as understood."
+        }
+    }
+
+    func explainKnowledgeGap(_ gap: StudyKnowledgeGap) {
+        guard let noteID else { return }
+        appState.requestKnowledgeGapExplanation(
+            concept: gap.title,
+            reason: gap.description,
+            evidence: gap.evidence,
+            noteID: noteID
+        )
     }
 
     func supplementalSection(for section: SupplementalStudySection) -> AnyView {
@@ -1655,7 +1824,7 @@ private extension StudyView {
             } else {
                 emptyCompactState(
                     title: "No active Teach Me question",
-                    message: "Start from a knowledge gap, confusing concept, weak mastery item, or the current selection."
+                    message: "Press Start to pick the best available gap, confusing concept, weak mastery item, or selected concept and turn it into one question."
                 )
             }
 
@@ -1754,7 +1923,7 @@ private extension StudyView {
     }
 
     private var knowledgeGapsSection: some View {
-        let gaps = studyData.notebookKnowledgeGaps.isEmpty ? buildNotebookKnowledgeGaps(currentNoteText: noteContentSource) : studyData.notebookKnowledgeGaps
+        let gaps = activeKnowledgeGaps()
         let artifact = studyData.artifacts.first(where: { $0.kind == .notebookKnowledgeGaps }) ?? buildArtifact(
             kind: .notebookKnowledgeGaps,
             title: "Knowledge Gaps",
@@ -1764,6 +1933,9 @@ private extension StudyView {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
+                quickAction("Scan Gaps", tint: Color(red: 0.73, green: 0.35, blue: 0.33), icon: "waveform.path.ecg") {
+                    generateNotebookKnowledgeGaps()
+                }
                 quickAction("Generate Quiz", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "checklist") {
                     focusStudyTool(.quizGenerator)
                     generateQuizSet()
@@ -1777,23 +1949,18 @@ private extension StudyView {
             }
 
             if gaps.isEmpty {
-                emptyCompactState(title: "No obvious notebook gaps", message: "The current note aligns reasonably well with related notes in this notebook.")
+                emptyCompactState(
+                    title: "No active knowledge gaps",
+                    message: "Use Scan Gaps to compare this note with the notebook. When a gap appears, Explain creates a reviewable AI proposal instead of changing the note directly."
+                )
             } else {
                 ForEach(gaps.prefix(4)) { gap in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(gap.title)
-                            .font(.headline)
-                        Text(gap.description)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Text(gap.evidence)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.studySurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    PossibleKnowledgeGapCard(
+                        model: KnowledgeGapDisplayModel(gap: gap),
+                        onExplain: { explainKnowledgeGap(gap) },
+                        onIgnore: { updateKnowledgeGap(gap, status: .ignored) },
+                        onMarkUnderstood: { updateKnowledgeGap(gap, status: .resolved, resolutionMethod: "markedUnderstood") }
+                    )
                 }
             }
 
@@ -2082,9 +2249,6 @@ private extension StudyView {
                 }
                 quickAction("Open Insights", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "chart.line.uptrend.xyaxis") {
                     focusStudyTool(.learningInsights)
-                }
-                quickAction("Debug Extraction", tint: Color(red: 0.53, green: 0.34, blue: 0.71), icon: "wrench.and.screwdriver") {
-                    openKnowledgeExtractionDebugger()
                 }
             }
         }
@@ -3231,13 +3395,135 @@ enum StudyCardType: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-struct StudyFlashcard: Identifiable, Codable, Equatable {
+enum StudyQuestionGenerationAction: String, Codable, CaseIterable, Identifiable {
+    case generateFlashcard
+    case recallQuestion
+    case understandingQuestion
+    case applicationQuestion
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .generateFlashcard:
+            return "Generate Flashcard"
+        case .recallQuestion:
+            return "Recall Question"
+        case .understandingQuestion:
+            return "Understanding Question"
+        case .applicationQuestion:
+            return "Application Question"
+        }
+    }
+}
+
+enum StudyQuestionCognitiveLevel: String, Codable, CaseIterable, Identifiable {
+    case recall
+    case understanding
+    case application
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .recall:
+            return "Recall"
+        case .understanding:
+            return "Understanding"
+        case .application:
+            return "Application"
+        }
+    }
+}
+
+struct StudyQuestionSourceReference: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
+    var noteID: UUID?
+    var rangeLocation: Int
+    var rangeLength: Int
+    var excerpt: String
+
+    var range: NSRange {
+        NSRange(location: rangeLocation, length: rangeLength)
+    }
+
+    init(noteID: UUID? = nil, range: NSRange, excerpt: String) {
+        self.noteID = noteID
+        self.rangeLocation = range.location
+        self.rangeLength = range.length
+        self.excerpt = excerpt
+    }
+}
+
+struct StudyQuestionAnswerRecord: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var answer: String
+    var isCorrect: Bool
+    var answeredAt: Date = Date()
+}
+
+struct StudyFlashcard: Identifiable, Codable, Equatable {
+    var id: UUID
     var type: StudyCardType
     var front: String
     var back: String
-    var whyItMatters: String = ""
-    var conceptIDs: [String] = []
+    var whyItMatters: String
+    var conceptIDs: [String]
+    var sourceConcept: String
+    var cognitiveLevel: StudyQuestionCognitiveLevel
+    var sourceReferences: [StudyQuestionSourceReference]
+    var generationAction: StudyQuestionGenerationAction
+
+    init(
+        id: UUID = UUID(),
+        type: StudyCardType,
+        front: String,
+        back: String,
+        whyItMatters: String = "",
+        conceptIDs: [String] = [],
+        sourceConcept: String = "",
+        cognitiveLevel: StudyQuestionCognitiveLevel = .recall,
+        sourceReferences: [StudyQuestionSourceReference] = [],
+        generationAction: StudyQuestionGenerationAction = .generateFlashcard
+    ) {
+        self.id = id
+        self.type = type
+        self.front = front
+        self.back = back
+        self.whyItMatters = whyItMatters
+        self.conceptIDs = conceptIDs
+        self.sourceConcept = sourceConcept
+        self.cognitiveLevel = cognitiveLevel
+        self.sourceReferences = sourceReferences
+        self.generationAction = generationAction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case front
+        case back
+        case whyItMatters
+        case conceptIDs
+        case sourceConcept
+        case cognitiveLevel
+        case sourceReferences
+        case generationAction
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        type = try container.decode(StudyCardType.self, forKey: .type)
+        front = try container.decode(String.self, forKey: .front)
+        back = try container.decode(String.self, forKey: .back)
+        whyItMatters = try container.decodeIfPresent(String.self, forKey: .whyItMatters) ?? ""
+        conceptIDs = try container.decodeIfPresent([String].self, forKey: .conceptIDs) ?? []
+        sourceConcept = try container.decodeIfPresent(String.self, forKey: .sourceConcept) ?? conceptIDs.first ?? ""
+        cognitiveLevel = try container.decodeIfPresent(StudyQuestionCognitiveLevel.self, forKey: .cognitiveLevel) ?? .recall
+        sourceReferences = try container.decodeIfPresent([StudyQuestionSourceReference].self, forKey: .sourceReferences) ?? []
+        generationAction = try container.decodeIfPresent(StudyQuestionGenerationAction.self, forKey: .generationAction) ?? .generateFlashcard
+    }
 }
 
 enum StudyQuizQuestionType: String, CaseIterable, Codable, Identifiable {
@@ -3272,14 +3558,88 @@ enum StudyQuizQuestionType: String, CaseIterable, Codable, Identifiable {
 }
 
 struct StudyQuizQuestion: Identifiable, Codable, Equatable {
-    var id: UUID = UUID()
+    var id: UUID
     var type: StudyQuizQuestionType
     var prompt: String
-    var options: [String] = []
+    var options: [String]
     var correctAnswer: String
-    var explanation: String = ""
-    var keywords: [String] = []
-    var conceptIDs: [String] = []
+    var explanation: String
+    var keywords: [String]
+    var conceptIDs: [String]
+    var sourceConcept: String
+    var cognitiveLevel: StudyQuestionCognitiveLevel
+    var sourceReferences: [StudyQuestionSourceReference]
+    var generationAction: StudyQuestionGenerationAction
+    var answerHistory: [StudyQuestionAnswerRecord]
+
+    init(
+        id: UUID = UUID(),
+        type: StudyQuizQuestionType,
+        prompt: String,
+        options: [String] = [],
+        correctAnswer: String,
+        explanation: String = "",
+        keywords: [String] = [],
+        conceptIDs: [String] = [],
+        sourceConcept: String = "",
+        cognitiveLevel: StudyQuestionCognitiveLevel = .recall,
+        sourceReferences: [StudyQuestionSourceReference] = [],
+        generationAction: StudyQuestionGenerationAction = .recallQuestion,
+        answerHistory: [StudyQuestionAnswerRecord] = []
+    ) {
+        self.id = id
+        self.type = type
+        self.prompt = prompt
+        self.options = options
+        self.correctAnswer = correctAnswer
+        self.explanation = explanation
+        self.keywords = keywords
+        self.conceptIDs = conceptIDs
+        self.sourceConcept = sourceConcept
+        self.cognitiveLevel = cognitiveLevel
+        self.sourceReferences = sourceReferences
+        self.generationAction = generationAction
+        self.answerHistory = answerHistory
+    }
+
+    func recordingAnswer(_ answer: String, isCorrect: Bool, answeredAt: Date = Date()) -> StudyQuizQuestion {
+        var copy = self
+        copy.answerHistory.append(StudyQuestionAnswerRecord(answer: answer, isCorrect: isCorrect, answeredAt: answeredAt))
+        return copy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case prompt
+        case options
+        case correctAnswer
+        case explanation
+        case keywords
+        case conceptIDs
+        case sourceConcept
+        case cognitiveLevel
+        case sourceReferences
+        case generationAction
+        case answerHistory
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        type = try container.decode(StudyQuizQuestionType.self, forKey: .type)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        options = try container.decodeIfPresent([String].self, forKey: .options) ?? []
+        correctAnswer = try container.decode(String.self, forKey: .correctAnswer)
+        explanation = try container.decodeIfPresent(String.self, forKey: .explanation) ?? ""
+        keywords = try container.decodeIfPresent([String].self, forKey: .keywords) ?? []
+        conceptIDs = try container.decodeIfPresent([String].self, forKey: .conceptIDs) ?? []
+        sourceConcept = try container.decodeIfPresent(String.self, forKey: .sourceConcept) ?? conceptIDs.first ?? keywords.first ?? ""
+        cognitiveLevel = try container.decodeIfPresent(StudyQuestionCognitiveLevel.self, forKey: .cognitiveLevel) ?? .recall
+        sourceReferences = try container.decodeIfPresent([StudyQuestionSourceReference].self, forKey: .sourceReferences) ?? []
+        generationAction = try container.decodeIfPresent(StudyQuestionGenerationAction.self, forKey: .generationAction) ?? .recallQuestion
+        answerHistory = try container.decodeIfPresent([StudyQuestionAnswerRecord].self, forKey: .answerHistory) ?? []
+    }
 }
 
 struct StudyQuizSet: Identifiable, Codable, Equatable {
@@ -3287,6 +3647,62 @@ struct StudyQuizSet: Identifiable, Codable, Equatable {
     var title: String
     var generatedAt: Date = Date()
     var questions: [StudyQuizQuestion]
+}
+
+struct StudyQuestionGenerationSource: Equatable {
+    var noteID: UUID?
+    var selectedText: String
+    var noteContext: String
+    var sourceRange: NSRange
+
+    var sourceExcerpt: String {
+        selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct StudyQuestionGenerationOutput: Equatable {
+    var flashcard: StudyFlashcard?
+    var question: StudyQuizQuestion?
+}
+
+struct StudyGeneratedInsertion: Equatable {
+    var content: String
+    var feature: String
+    var sourceConcept: String?
+    var sourceItemID: String?
+    var sourceItemTitle: String?
+    var sourceExcerpt: String
+}
+
+protocol StudyQuestionProviding {
+    func generateStudyQuestion(
+        action: StudyQuestionGenerationAction,
+        source: StudyQuestionGenerationSource
+    ) async -> StudyQuestionGenerationOutput
+}
+
+struct LiveStudyQuestionProvider: StudyQuestionProviding {
+    func generateStudyQuestion(
+        action: StudyQuestionGenerationAction,
+        source: StudyQuestionGenerationSource
+    ) async -> StudyQuestionGenerationOutput {
+        await AIService.shared.generateStudyQuestion(action: action, source: source)
+    }
+}
+
+struct StudyQuestionGenerationEngine {
+    var provider: any StudyQuestionProviding
+
+    init(provider: any StudyQuestionProviding = LiveStudyQuestionProvider()) {
+        self.provider = provider
+    }
+
+    func generate(
+        action: StudyQuestionGenerationAction,
+        source: StudyQuestionGenerationSource
+    ) async -> StudyQuestionGenerationOutput {
+        await provider.generateStudyQuestion(action: action, source: source)
+    }
 }
 
 struct StudyTutorQuestion: Identifiable, Codable, Equatable {
@@ -3391,12 +3807,229 @@ struct StudyActiveRecallPrompt: Codable, Equatable, Identifiable {
     var hiddenText: String = ""
 }
 
+enum StudyKnowledgeGapStatus: String, Codable, Equatable {
+    case active
+    case ignored
+    case resolved
+
+    var displayTitle: String {
+        switch self {
+        case .active:
+            return "Active"
+        case .ignored:
+            return "Ignored"
+        case .resolved:
+            return "Resolved"
+        }
+    }
+}
+
 struct StudyKnowledgeGap: Codable, Equatable, Identifiable {
-    var id: UUID = UUID()
+    var id: UUID
     var title: String
     var description: String
     var evidence: String
     var priority: Double
+    var status: StudyKnowledgeGapStatus
+    var detectedAt: Date
+    var updatedAt: Date
+    var detectionHeuristic: String
+    var resolutionMethod: String?
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        description: String,
+        evidence: String,
+        priority: Double,
+        status: StudyKnowledgeGapStatus = .active,
+        detectedAt: Date = Date(),
+        updatedAt: Date = Date(),
+        detectionHeuristic: String = "studyKnowledgeGapAnalysis",
+        resolutionMethod: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.evidence = evidence
+        self.priority = priority
+        self.status = status
+        self.detectedAt = detectedAt
+        self.updatedAt = updatedAt
+        self.detectionHeuristic = detectionHeuristic
+        self.resolutionMethod = resolutionMethod
+    }
+
+    var normalizedKey: String {
+        StudyKnowledgeGap.normalizedKey(for: title)
+    }
+
+    var supportingEvidenceSummary: String {
+        evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "No supporting evidence captured."
+            : evidence
+    }
+
+    func updatingStatus(_ status: StudyKnowledgeGapStatus, resolutionMethod: String? = nil, now: Date = Date()) -> StudyKnowledgeGap {
+        var copy = self
+        copy.status = status
+        copy.updatedAt = now
+        copy.resolutionMethod = resolutionMethod
+        return copy
+    }
+
+    static func merge(existing: [StudyKnowledgeGap], detected: [StudyKnowledgeGap], now: Date = Date()) -> [StudyKnowledgeGap] {
+        var gapsByKey = existing.reduce(into: [String: StudyKnowledgeGap]()) { result, gap in
+            let key = gap.normalizedKey
+            guard !key.isEmpty else { return }
+            result[key] = gap
+        }
+
+        for detectedGap in detected {
+            let key = detectedGap.normalizedKey
+            guard !key.isEmpty else { continue }
+            if var existingGap = gapsByKey[key] {
+                existingGap.title = detectedGap.title
+                existingGap.description = detectedGap.description
+                existingGap.evidence = detectedGap.evidence
+                existingGap.priority = detectedGap.priority
+                existingGap.detectionHeuristic = detectedGap.detectionHeuristic
+                existingGap.updatedAt = now
+                gapsByKey[key] = existingGap
+            } else {
+                var activeGap = detectedGap
+                activeGap.status = .active
+                activeGap.detectedAt = now
+                activeGap.updatedAt = now
+                gapsByKey[key] = activeGap
+            }
+        }
+
+        return gapsByKey.values.sorted { lhs, rhs in
+            if lhs.status != rhs.status { return lhs.status.rawValue < rhs.status.rawValue }
+            if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    static func normalizedKey(for value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case description
+        case evidence
+        case priority
+        case status
+        case detectedAt
+        case updatedAt
+        case detectionHeuristic
+        case resolutionMethod
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decode(String.self, forKey: .description)
+        evidence = try container.decode(String.self, forKey: .evidence)
+        priority = try container.decode(Double.self, forKey: .priority)
+        status = try container.decodeIfPresent(StudyKnowledgeGapStatus.self, forKey: .status) ?? .active
+        detectedAt = try container.decodeIfPresent(Date.self, forKey: .detectedAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? detectedAt
+        detectionHeuristic = try container.decodeIfPresent(String.self, forKey: .detectionHeuristic) ?? "studyKnowledgeGapAnalysis"
+        resolutionMethod = try container.decodeIfPresent(String.self, forKey: .resolutionMethod)
+    }
+}
+
+struct KnowledgeGapDisplayModel: Identifiable, Equatable {
+    let id: UUID
+    let concept: String
+    let reason: String
+    let supportingEvidenceSummary: String
+    let status: StudyKnowledgeGapStatus
+
+    init(gap: StudyKnowledgeGap) {
+        id = gap.id
+        concept = gap.title
+        reason = gap.description
+        supportingEvidenceSummary = gap.supportingEvidenceSummary
+        status = gap.status
+    }
+}
+
+struct PossibleKnowledgeGapCard: View {
+    let model: KnowledgeGapDisplayModel
+    let onExplain: () -> Void
+    let onIgnore: () -> Void
+    let onMarkUnderstood: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("⚠ Possible Knowledge Gap")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color(red: 0.73, green: 0.35, blue: 0.33))
+
+                Spacer(minLength: 8)
+
+                Text(model.status.displayTitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.studySurfaceRaised)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+
+            Text("You may need to revisit “\(model.concept)”.")
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Reason:")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(model.reason)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Evidence:")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(model.supportingEvidenceSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Button("Explain", action: onExplain)
+                    .buttonStyle(.borderedProminent)
+                Button("Ignore", action: onIgnore)
+                    .buttonStyle(.borderless)
+                Button("Mark Understood", action: onMarkUnderstood)
+                    .buttonStyle(.borderless)
+            }
+            .font(.caption.weight(.semibold))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.studySurface)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
+        )
+    }
 }
 
 struct NoteStudyData: Codable, Equatable {
@@ -3677,7 +4310,7 @@ struct StudyView: View {
     let onRecordQuizAttempt: (StudyQuizSet, Int, Int) -> Void
     let onEvaluateTestMe: (StudyTutorQuestion, String, @escaping (StudyTutorEvaluation) -> Void) -> Void
     let onRecordTestMeSession: (Int, Int, [String]) -> Void
-    let onInsertContent: (String) -> Void
+    let onInsertContent: (StudyGeneratedInsertion) -> Void
     @Binding var panelWidth: CGFloat
 
     @EnvironmentObject private var appState: AppState
@@ -3696,6 +4329,8 @@ struct StudyView: View {
     @State private var expandedSupplementalSections: Set<SupplementalStudySection> = []
     @State private var expandedConceptNodeIDs: Set<UUID> = []
     @State private var teachMeDraftAnswer: String = ""
+    @State private var generatedQuestionDraftAnswer: String = ""
+    @State private var isGeneratedQuestionAnswerRevealed: Bool = false
     @State private var transientStatusMessage: String?
     @State private var studyScrollContentHeight: CGFloat = 0
     @State private var studyScrollViewportHeight: CGFloat = 0
@@ -3815,6 +4450,8 @@ struct StudyView: View {
 
                     ScrollView {
                         LazyVStack(spacing: 12) {
+                            studyWorkflowMap
+
                             ForEach(StudyTool.allCases) { tool in
                                 toolSection(for: tool)
                             }
@@ -4032,6 +4669,8 @@ struct StudyView: View {
                     .lineLimit(2)
             }
             .padding(.top, 2)
+
+            demoReadinessHintStrip
         }
         .padding(18)
         .background(
@@ -4048,6 +4687,201 @@ struct StudyView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 14, x: 0, y: 8)
         .padding(18)
+    }
+
+    private var demoReadinessHintStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Start here")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    quickAction("Find Gaps", tint: Color(red: 0.73, green: 0.35, blue: 0.33), icon: "exclamationmark.triangle") {
+                        revealSupplementalSection(.knowledgeGaps)
+                        generateNotebookKnowledgeGaps()
+                    }
+
+                    quickAction("Teach Me", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "graduationcap") {
+                        revealSupplementalSection(.teachMe)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    quickAction("Questions", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "checklist") {
+                        focusStudyTool(.quizGenerator)
+                    }
+
+                    quickAction("Flashcards", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "rectangle.stack") {
+                        focusStudyTool(.flashcards)
+                    }
+                }
+            }
+            .disabled(!noteHasContent)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.studySurface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var studyWorkflowMap: some View {
+        let gapCount = activeKnowledgeGaps().count
+        let analysis = studyData.learningInsights
+        let missingCount = analysis.missingConcepts.count
+        let partialCount = analysis.partiallyCapturedConcepts.count
+        let teachMeState = studyData.teachMeSession?.state ?? .idle
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Study Map")
+                        .font(.headline)
+                    Text("Find what is missing, practice it, and add only reviewed AI proposals to the note.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Text("AI proposes. Student decides.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(red: 0.24, green: 0.49, blue: 0.59))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(red: 0.24, green: 0.49, blue: 0.59).opacity(0.10))
+                    .clipShape(Capsule())
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                studyMapTile(
+                    title: "Coverage",
+                    value: Self.coverageSummary(
+                        missing: missingCount,
+                        partial: partialCount,
+                        hasAnalysis: analysis.hasResults,
+                        isLoading: isGenerating
+                    ),
+                    icon: "chart.line.uptrend.xyaxis",
+                    tint: Color(red: 0.24, green: 0.49, blue: 0.59)
+                ) {
+                    focusStudyTool(.learningInsights)
+                }
+
+                studyMapTile(
+                    title: "Knowledge Gaps",
+                    value: Self.knowledgeGapSummary(activeCount: gapCount),
+                    icon: "exclamationmark.triangle",
+                    tint: Color(red: 0.73, green: 0.35, blue: 0.33)
+                ) {
+                    revealSupplementalSection(.knowledgeGaps)
+                }
+
+                studyMapTile(
+                    title: "Teach Me",
+                    value: Self.teachMeSummary(for: teachMeState),
+                    icon: "graduationcap",
+                    tint: Color(red: 0.31, green: 0.56, blue: 0.38)
+                ) {
+                    revealSupplementalSection(.teachMe)
+                }
+
+                studyMapTile(
+                    title: "Practice",
+                    value: Self.practiceSummary(flashcards: studyData.flashcards.count, quizSets: studyData.quizSets.count),
+                    icon: "rectangle.stack",
+                    tint: Color(red: 0.60, green: 0.45, blue: 0.20)
+                ) {
+                    focusStudyTool(studyData.flashcards.isEmpty ? .quizGenerator : .flashcards)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.studySurfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
+        )
+        .accessibilityIdentifier("study-map")
+    }
+
+    private func studyMapTile(title: String, value: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 28, height: 28)
+                    .background(tint.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(value)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+            .background(Color.studySurface)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(tint.opacity(0.14), lineWidth: 0.8)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Open \(title)")
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+        .accessibilityIdentifier("study-map-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))")
+    }
+
+    static func coverageSummary(missing: Int, partial: Int, hasAnalysis: Bool = true, isLoading: Bool = false) -> String {
+        if isLoading {
+            return "Analyzing coverage"
+        }
+        guard hasAnalysis else {
+            return "Analysis not run yet"
+        }
+        if missing == 0 && partial == 0 {
+            return "No gaps in the current analysis"
+        }
+        return "\(missing) missing, \(partial) partial"
+    }
+
+    static func knowledgeGapSummary(activeCount: Int) -> String {
+        activeCount == 0 ? "Scan or keep studying" : "\(activeCount) active"
+    }
+
+    static func teachMeSummary(for state: TeachMeSessionState) -> String {
+        switch state {
+        case .idle:
+            return "Ready to start"
+        case .question:
+            return "Question waiting"
+        case .answering:
+            return "Answer in progress"
+        case .feedback:
+            return "Feedback ready"
+        case .complete:
+            return "Session complete"
+        }
+    }
+
+    static func practiceSummary(flashcards: Int, quizSets: Int) -> String {
+        if flashcards == 0 && quizSets == 0 {
+            return "Create cards or quiz"
+        }
+        return "\(flashcards) cards, \(quizSets) quizzes"
     }
 
     private func toolSection(for tool: StudyTool) -> some View {
@@ -4219,6 +5053,12 @@ struct StudyView: View {
             statRow(title: "Flashcards Available", value: "\(cards.count)")
             statRow(title: "Reviewed", value: "\(studyData.progress.flashcardsReviewed)")
 
+            HStack(spacing: 8) {
+                quickAction("Generate Flashcard", tint: Color(red: 0.31, green: 0.56, blue: 0.38), icon: "rectangle.stack.badge.plus") {
+                    generateSelectedStudyItem(.generateFlashcard)
+                }
+            }
+
             if !cards.isEmpty {
                 ProgressView(value: Self.flashcardProgressValue(currentIndex: flashcardIndex, cardCount: cards.count))
                     .tint(card?.type.tint ?? Color(red: 0.31, green: 0.56, blue: 0.38))
@@ -4229,7 +5069,7 @@ struct StudyView: View {
             if cards.isEmpty {
                 emptyCompactState(
                     title: "No flashcards yet",
-                    message: "Generate materials to create review cards from the active note."
+                    message: "Use Generate Flashcard above for the current selection, or press Create in the Flashcards row to build a deck from the note."
                 )
             } else if let card {
                 VStack(alignment: .leading, spacing: 10) {
@@ -4346,7 +5186,7 @@ struct StudyView: View {
 
                         Button {
                             performFlashcardAction {
-                                insertGeneratedContent(flashcardCardText(card))
+                                insertGeneratedContent(flashcardCardText(card), card: card)
                             }
                         } label: {
                             Text("Insert Card")
@@ -4523,11 +5363,28 @@ struct StudyView: View {
     private var quizDetail: some View {
         let multipleChoice = studyData.quizSets.flatMap(\.questions).filter { $0.type == .multipleChoice }.count
         let shortAnswer = studyData.quizSets.flatMap(\.questions).filter { $0.type == .shortAnswer }.count
+        let generatedQuestion = studyData.quizSets.first?.questions.first
 
         return VStack(alignment: .leading, spacing: 12) {
             statRow(title: "Quiz Sets", value: "\(studyData.quizSets.count)")
             statRow(title: "Multiple Choice", value: "\(multipleChoice)")
             statRow(title: "Short Answer", value: "\(shortAnswer)")
+
+            HStack(spacing: 8) {
+                quickAction("Recall Question", tint: Color(red: 0.60, green: 0.45, blue: 0.20), icon: "arrow.counterclockwise") {
+                    generateSelectedStudyItem(.recallQuestion)
+                }
+                quickAction("Understanding", tint: Color(red: 0.24, green: 0.49, blue: 0.59), icon: "lightbulb") {
+                    generateSelectedStudyItem(.understandingQuestion)
+                }
+                quickAction("Application", tint: Color(red: 0.53, green: 0.34, blue: 0.71), icon: "arrow.triangle.branch") {
+                    generateSelectedStudyItem(.applicationQuestion)
+                }
+            }
+
+            if let generatedQuestion {
+                generatedQuestionPracticeCard(generatedQuestion)
+            }
 
             if let quizSet = studyData.quizSets.first {
                 let artifact = studyData.artifacts.first(where: { $0.kind == .quizGenerator }) ?? buildArtifact(
@@ -4547,10 +5404,87 @@ struct StudyView: View {
             } else {
                 emptyCompactState(
                     title: "No quizzes yet",
-                    message: "Generate a quiz to check recall while staying in the note."
+                    message: "Use Recall Question, Understanding, or Application above for one selected-content question, or press Build in the Quiz Generator row for a full set."
                 )
             }
         }
+    }
+
+    private func generatedQuestionPracticeCard(_ question: StudyQuizQuestion) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(question.cognitiveLevel.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(red: 0.60, green: 0.45, blue: 0.20))
+                Spacer()
+                if !question.sourceConcept.isEmpty {
+                    Text(question.sourceConcept)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text(question.prompt)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            TextField("Type your answer", text: $generatedQuestionDraftAnswer, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...4)
+
+            if isGeneratedQuestionAnswerRevealed {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Answer")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(question.correctAnswer)
+                        .font(.subheadline)
+                    if !question.explanation.isEmpty {
+                        Text(question.explanation)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.studySurfaceRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            HStack(spacing: 8) {
+                Button(isGeneratedQuestionAnswerRevealed ? "Hide Answer" : "Reveal Answer") {
+                    isGeneratedQuestionAnswerRevealed.toggle()
+                }
+                .buttonStyle(.borderless)
+
+                Button("Correct") {
+                    recordGeneratedQuestionAnswer(question, isCorrect: true)
+                }
+                .buttonStyle(.borderless)
+
+                Button("Incorrect") {
+                    recordGeneratedQuestionAnswer(question, isCorrect: false)
+                }
+                .buttonStyle(.borderless)
+
+                Spacer()
+            }
+            .font(.caption.weight(.semibold))
+
+            if let reference = question.sourceReferences.first {
+                Text("Source: characters \(reference.rangeLocation)-\(reference.rangeLocation + reference.rangeLength)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.studySurface)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.studyBorderSoft, lineWidth: 1)
+        )
     }
 
     private var summaryDetail: some View {
@@ -4687,7 +5621,7 @@ struct StudyView: View {
             .buttonStyle(.plain)
 
             Button {
-                insertGeneratedContent(content)
+                insertGeneratedContent(content, artifact: artifact)
             } label: {
                 Text("Add to Note")
                     .font(.caption.weight(.semibold))
@@ -4772,6 +5706,12 @@ struct StudyView: View {
     private func focusStudyTool(_ tool: StudyTool) {
         withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) {
             selectedTool = tool
+        }
+    }
+
+    private func revealSupplementalSection(_ section: SupplementalStudySection) {
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) {
+            _ = expandedSupplementalSections.insert(section)
         }
     }
 
@@ -4977,10 +5917,48 @@ struct StudyView: View {
         generate(for: tool)
     }
 
-    private func insertGeneratedContent(_ content: String) {
+    private func insertGeneratedContent(_ content: String, artifact: StudyArtifact) {
+        insertGeneratedContent(
+            content,
+            feature: artifact.kind.title,
+            sourceConcept: effectiveKeyConcepts.first,
+            sourceItemID: artifact.id.uuidString,
+            sourceItemTitle: artifact.title,
+            sourceExcerpt: String(noteContentSource.prefix(600))
+        )
+    }
+
+    private func insertGeneratedContent(_ content: String, card: StudyFlashcard) {
+        insertGeneratedContent(
+            content,
+            feature: StudyArtifactKind.flashcards.title,
+            sourceConcept: card.sourceConcept.isEmpty ? card.conceptIDs.first : card.sourceConcept,
+            sourceItemID: card.id.uuidString,
+            sourceItemTitle: card.front,
+            sourceExcerpt: card.sourceReferences.first?.excerpt ?? card.front
+        )
+    }
+
+    private func insertGeneratedContent(
+        _ content: String,
+        feature: String,
+        sourceConcept: String?,
+        sourceItemID: String?,
+        sourceItemTitle: String?,
+        sourceExcerpt: String
+    ) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        onInsertContent(trimmed)
+        onInsertContent(
+            StudyGeneratedInsertion(
+                content: trimmed,
+                feature: feature,
+                sourceConcept: sourceConcept,
+                sourceItemID: sourceItemID,
+                sourceItemTitle: sourceItemTitle,
+                sourceExcerpt: sourceExcerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        )
     }
 
     private func copyToPasteboard(_ content: String) {

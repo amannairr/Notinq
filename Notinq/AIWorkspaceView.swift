@@ -269,8 +269,8 @@ struct AIWorkspaceView: View {
                 }
 
                 actionCard(
-                    title: "Run Evidence Demo",
-                    subtitle: "Show the note, retrieval, citations, and mastery update flow.",
+                    title: "Show Evidence Trail",
+                    subtitle: "Review the note context, sources, and mastery signals behind tutor answers.",
                     icon: "sparkles",
                     tint: Color(red: 0.45, green: 0.41, blue: 0.64)
                 ) {
@@ -662,7 +662,7 @@ struct AIWorkspaceView: View {
                     }
                 }
             } else {
-                Text("Run the demo flow or ask a question to populate the evidence graph.")
+                Text("Ask a question or show the evidence trail to populate this context.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 6)
@@ -808,7 +808,7 @@ struct AIWorkspaceView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Demo Flow")
+                    Text("Evidence Trail")
                         .font(.headline)
                     Text("note → knowledge graph → retrieval → cited answer → mastery update")
                         .font(.caption)
@@ -818,7 +818,7 @@ struct AIWorkspaceView: View {
             }
 
             if demoTrace.isEmpty {
-                Text("Tap Run Evidence Demo to watch the end-to-end evidence flow.")
+                Text("Tap Show Evidence Trail to review how Notinq uses context before answering.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -952,7 +952,7 @@ struct AIWorkspaceView: View {
 
     private var assistantGreeting: String {
         let noteName = noteTitle.isEmpty ? "this note" : noteTitle
-        return "I’m ready to help with \(noteName). Try summarize, rewrite, explain, or run the evidence demo."
+        return "I’m ready to help with \(noteName). Try summarize, rewrite, explain, or show the evidence trail."
     }
 
     private var backgroundGradient: LinearGradient {

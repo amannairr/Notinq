@@ -19,13 +19,13 @@ struct ModeBarView: View {
     var body: some View {
         VStack(spacing: 22) {
 
-            // Logo
-            Text("E")
+            Text("N")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(Color.railIconActive)
                 .frame(width: 36, height: 36)
                 .background(Color.white.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel("Notinq")
 
             // Modes
             VStack(spacing: 16) {
@@ -39,22 +39,7 @@ struct ModeBarView: View {
 
             Spacer()
 
-            // 🔥 Profile + Settings (moved here)
             VStack(spacing: 16) {
-
-                Button(action: {
-                    // profile click
-                }) {
-                    Circle()
-                        .fill(Color.white.opacity(0.15))
-                        .frame(width: 36, height: 36)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
-                        )
-                }
-                .buttonStyle(.plain)
-
                 ModeUtilityButton(icon: "gearshape") {
                     appState.isSettingsOpen = true
                 }
@@ -114,6 +99,9 @@ struct ModeItem: View {
         .buttonStyle(.plain)
 
         .toolbarTooltip(modeTooltip)
+        .accessibilityLabel(modeTooltip)
+        .accessibilityHint(selectedMode == mode ? "Current section" : "Switches to \(modeTooltip).")
+        .accessibilityIdentifier("mode-\(mode.rawValue)")
 
         .onHover { hover = $0 }
 
@@ -170,6 +158,9 @@ struct ModeUtilityButton: View {
         .buttonStyle(.plain)
 
         .toolbarTooltip("Settings")
+        .accessibilityLabel("Settings")
+        .accessibilityHint("Opens Notinq settings.")
+        .accessibilityIdentifier("settings-button")
 
         .onHover { hover = $0 }
 

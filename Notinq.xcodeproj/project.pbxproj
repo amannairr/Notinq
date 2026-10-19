@@ -24,6 +24,7 @@
 		07B462AE2FA77B79009B2513 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AD2FA77B79009B2513 /* MetalKit.framework */; };
 		07B462B02FA77B87009B2513 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07B462AF2FA77B87009B2513 /* Accelerate.framework */; };
 		07B462BB2FA7A2F6009B2513 /* LlamaBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */; };
+		07EC9B94306713BB0095F8A3 /* ResearchInstrumentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07EC9B93306713BA0095F8A3 /* ResearchInstrumentation.swift */; };
 		07F7A0012FB8000100AA1001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07F7A0002FB8000100AA1001 /* XCTest.framework */; };
 		8A1D01012FB1000200AA1001 /* libllama.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A1D01022FB1000200AA1001 /* libllama.a */; };
 /* End PBXBuildFile section */
@@ -69,6 +70,7 @@
 		07B462AF2FA77B87009B2513 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		07B462B92FA7A2F6009B2513 /* LlamaBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LlamaBridge.h; sourceTree = "<group>"; };
 		07B462BA2FA7A2F6009B2513 /* LlamaBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LlamaBridge.mm; sourceTree = "<group>"; };
+		07EC9B93306713BA0095F8A3 /* ResearchInstrumentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchInstrumentation.swift; sourceTree = "<group>"; };
 		07F7A0002FB8000100AA1001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		8A1D01022FB1000200AA1001 /* libllama.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libllama.a; path = "ThirdParty/llama-libs/libllama.a"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -204,6 +206,7 @@
 				071AAE83301E10B20076E7B7 /* SemanticChunker.swift */,
 				071AAE85301E12AB0076E7B7 /* KnowledgeExtractionDebuggerView.swift */,
 				079DD65D3059C64E008A107D /* Views */,
+				07EC9B93306713BA0095F8A3 /* ResearchInstrumentation.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -408,6 +411,7 @@
 				07ABBDC12FDA5191002EE210 /* StudyResponseParser.swift in Sources */,
 				07B462902FA648A8009B2513 /* WhisperManager.swift in Sources */,
 				071AAE80301E0DF40076E7B7 /* PromptTextAssets.swift in Sources */,
+				07EC9B94306713BB0095F8A3 /* ResearchInstrumentation.swift in Sources */,
 				071AAE84301E10B20076E7B7 /* SemanticChunker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

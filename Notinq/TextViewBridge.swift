@@ -45,6 +45,7 @@ struct AIBlockSelection {
     let content: String
     let fullRange: NSRange
     let contentRange: NSRange
+    let sourceInfo: AIBlockSourceInfo?
 }
 
 extension NSAttributedString.Key {
@@ -52,6 +53,9 @@ extension NSAttributedString.Key {
     static let aiBlockRole = NSAttributedString.Key("NotinqAIBlockRole")
     static let aiBlockActionTitle = NSAttributedString.Key("NotinqAIBlockActionTitle")
     static let aiBlockInsertedAt = NSAttributedString.Key("NotinqAIBlockInsertedAt")
+    static let aiBlockActionRawValue = NSAttributedString.Key("NotinqAIBlockActionRawValue")
+    static let aiBlockCreatedAt = NSAttributedString.Key("NotinqAIBlockCreatedAt")
+    static let aiBlockSourceReference = NSAttributedString.Key("NotinqAIBlockSourceReference")
 }
 
 extension HeadingLevel {
@@ -72,14 +76,9 @@ class TextViewBridge {
     private var audioStreamManager: AudioStreamManager?
     private var editorInsertionManager: EditorInsertionManager?
     private var isLiveTranscribing = false
-    private var aiStreamingRange: NSRange?
-    private var aiStreamingBlockID: String?
-    private var aiStreamingActionTitle: String?
-    private var aiStreamingDidChangeText = false
-    private var streamingBuffer: AIStreamingBuffer?
     private var llamaNotificationToken: NSObjectProtocol?
     var isAIStreamingActive: Bool {
-        aiStreamingRange != nil
+        false
     }
 
     init() {
@@ -279,21 +278,8 @@ class TextViewBridge {
             actionTitle: title,
             content: content,
             fullRange: fullRange,
-            contentRange: contentRange
-        )
-    }
-
-    func insertAIResult(action: AIAction, response: String, selectionRange: NSRange) {
-        guard let tv = textView, let storage = tv.textStorage else { return }
-        let cleaned = Self.cleanGeneratedText(response)
-        guard !cleaned.isEmpty else { return }
-
-        let insertionIndex = safeInsertionIndex(after: selectionRange, textLength: storage.length)
-        insertAIBlock(
-            actionTitle: action.blockTitle,
-            content: cleaned,
-            insertionIndex: insertionIndex,
-            preserveSelection: nil
+            contentRange: contentRange,
+            sourceInfo: sourceInfoForAIBlock(id: blockID, in: storage, within: fullRange)
         )
     }
 
@@ -345,9 +331,12 @@ class TextViewBridge {
         let insertionIndex = min(max(0, proposal.insertionLocation), storage.length)
         insertAIBlock(
             actionTitle: proposal.action.blockTitle,
+            action: proposal.action,
             content: content,
             insertionIndex: insertionIndex,
-            preserveSelection: proposal.originalSelectionRange
+            preserveSelection: proposal.originalSelectionRange,
+            sourceReference: SourceReference(proposal: proposal),
+            createdAt: proposal.createdAt
         )
 
         accepted.generatedText = content
@@ -383,24 +372,40 @@ class TextViewBridge {
 
     private func insertAIBlock(
         actionTitle: String,
+        action: AIEditorAction?,
         content: String,
         insertionIndex: Int,
-        preserveSelection: NSRange?
+        preserveSelection: NSRange?,
+        sourceReference: SourceReference? = nil,
+        createdAt: Date = Date()
     ) {
         guard let tv = textView, let storage = tv.textStorage else { return }
         let blockID = UUID().uuidString
         let insertString = makeAIBlock(
             actionTitle: actionTitle,
+            action: action,
             blockID: blockID,
             content: content,
             leadingSpacing: leadingSpacing(at: insertionIndex, in: tv.string),
-            trailingSpacing: "\n"
+            trailingSpacing: "\n",
+            sourceReference: sourceReference,
+            createdAt: createdAt
         )
+        let insertionRange = NSRange(location: insertionIndex, length: 0)
+        let undoManager = tv.undoManager
+        undoManager?.disableUndoRegistration()
+        guard tv.shouldChangeText(in: insertionRange, replacementString: insertString.string) else {
+            undoManager?.enableUndoRegistration()
+            return
+        }
 
+        let previousText = NSAttributedString(attributedString: storage)
+        let previousSelection = tv.selectedRange()
         storage.beginEditing()
-        storage.insert(insertString, at: insertionIndex)
+        storage.replaceCharacters(in: insertionRange, with: insertString)
         storage.endEditing()
         markRecentInsertion(in: tv, range: NSRange(location: insertionIndex, length: insertString.length))
+        undoManager?.enableUndoRegistration()
 
         let cursor = insertionIndex + insertString.length - 1
         if let preserveSelection {
@@ -409,220 +414,127 @@ class TextViewBridge {
         } else {
             tv.setSelectedRange(NSRange(location: cursor, length: 0))
         }
+        registerUndoForAIBlockInsertion(
+            in: tv,
+            previousText: previousText,
+            previousSelection: previousSelection
+        )
         tv.didChangeText()
         tv.scrollRangeToVisible(NSRange(location: max(0, cursor - 1), length: 1))
     }
 
-    func beginAIStreaming(action: AIAction, selectionRange: NSRange) {
-        beginAIStreaming(title: action.blockTitle, selectionRange: selectionRange)
-    }
-
-    func beginAIStreaming(title: String, selectionRange: NSRange) {
-        guard let tv = textView, let storage = tv.textStorage else { return }
-        focus()
-
-        let insertionIndex = safeInsertionIndex(after: selectionRange, textLength: storage.length)
-        let blockID = UUID().uuidString
-        let header = makeAIBlockHeader(
-            actionTitle: title,
-            blockID: blockID,
-            leadingSpacing: leadingSpacing(at: insertionIndex, in: tv.string)
-        )
-
-        storage.beginEditing()
-        storage.insert(header, at: insertionIndex)
-        storage.endEditing()
-        markRecentInsertion(in: tv, range: NSRange(location: insertionIndex, length: header.length))
-
-        let start = insertionIndex + header.length
-        aiStreamingRange = NSRange(location: start, length: 0)
-        aiStreamingBlockID = blockID
-        aiStreamingActionTitle = title
-        aiStreamingDidChangeText = false
-        streamingBuffer?.cancel()
-        streamingBuffer = AIStreamingBuffer(flushInterval: 0.05) { [weak self] chunk in
-            self?.flushAIStreamingChunk(chunk, scrollToEnd: false)
-        }
-        tv.setSelectedRange(NSRange(location: start, length: 0))
-        tv.scrollRangeToVisible(NSRange(location: max(0, start - 1), length: 1))
-        tv.didChangeText()
-    }
-
-    func appendAIStreamingToken(_ token: String) {
-        guard !token.isEmpty else { return }
-        if Thread.isMainThread {
-            streamingBuffer?.append(token)
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.streamingBuffer?.append(token)
-            }
-        }
-    }
-
-    func finishAIStreaming() {
-        guard let tv = textView,
-              let storage = tv.textStorage else { return }
-
-        if Thread.isMainThread {
-            streamingBuffer?.flushNow()
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                self?.streamingBuffer?.flushNow()
-            }
-        }
-
-        if let range = aiStreamingRange,
-           let blockID = aiStreamingBlockID,
-           range.location >= 0,
-           range.location + range.length <= storage.length {
-            let raw = (tv.string as NSString).substring(with: range)
-            let cleaned = Self.cleanGeneratedText(raw)
-            let rendered = renderMarkdownContent(cleaned, blockID: blockID)
+    private func registerUndoForAIBlockInsertion(
+        in textView: NSTextView,
+        previousText: NSAttributedString,
+        previousSelection: NSRange
+    ) {
+        guard let undoManager = textView.undoManager else { return }
+        let currentText = NSAttributedString(attributedString: textView.attributedString())
+        let currentSelection = textView.selectedRange()
+        undoManager.registerUndo(withTarget: textView) { target in
+            guard let storage = target.textStorage else { return }
+            target.setSelectedRange(NSRange(location: 0, length: 0))
             storage.beginEditing()
-            storage.replaceCharacters(
-                in: range,
-                with: rendered
-            )
-            let end = range.location + rendered.length
-            let trailing = NSAttributedString(string: "\n", attributes: normalTypingAttributes())
-            storage.insert(trailing, at: end)
+            storage.setAttributedString(previousText)
             storage.endEditing()
-            tv.setSelectedRange(NSRange(location: end + trailing.length, length: 0))
-            tv.scrollRangeToVisible(NSRange(location: max(0, end - 1), length: 1))
-            tv.didChangeText()
-        } else if aiStreamingDidChangeText {
-            tv.didChangeText()
+            target.setSelectedRange(self.clampedRange(previousSelection, textLength: storage.length))
+            target.didChangeText()
+            target.undoManager?.registerUndo(withTarget: target) { redoTarget in
+                guard let redoStorage = redoTarget.textStorage else { return }
+                redoTarget.setSelectedRange(NSRange(location: 0, length: 0))
+                redoStorage.beginEditing()
+                redoStorage.setAttributedString(currentText)
+                redoStorage.endEditing()
+                redoTarget.setSelectedRange(self.clampedRange(currentSelection, textLength: redoStorage.length))
+                redoTarget.didChangeText()
+            }
         }
-
-        aiStreamingRange = nil
-        aiStreamingBlockID = nil
-        aiStreamingActionTitle = nil
-        aiStreamingDidChangeText = false
-        streamingBuffer?.cancel()
-        streamingBuffer = nil
-    }
-
-    private func flushAIStreamingChunk(_ chunk: String, scrollToEnd: Bool) {
-        guard let tv = textView,
-              let storage = tv.textStorage,
-              let range = aiStreamingRange,
-              let blockID = aiStreamingBlockID,
-              !chunk.isEmpty else { return }
-
-        let stringLength = (tv.string as NSString).length
-        guard range.location >= 0,
-              range.location <= stringLength,
-              range.length >= 0,
-              range.location + range.length <= stringLength else {
-            aiStreamingRange = nil
-            aiStreamingDidChangeText = false
-            return
+        undoManager.setActionName("Insert AI Proposal")
+        if textView.window == nil {
+            while undoManager.groupingLevel > 0 {
+                undoManager.endUndoGrouping()
+            }
         }
-
-        let insertionPoint = range.location + range.length
-        guard insertionPoint >= 0, insertionPoint <= stringLength else {
-            aiStreamingRange = nil
-            aiStreamingDidChangeText = false
-            return
-        }
-
-        let attributed = NSAttributedString(
-            string: chunk,
-            attributes: aiBlockContentAttributes(blockID: blockID)
-        )
-
-        storage.beginEditing()
-        storage.replaceCharacters(in: NSRange(location: insertionPoint, length: 0), with: attributed)
-        storage.endEditing()
-
-        let nextLength = range.length + chunk.utf16.count
-        aiStreamingRange = NSRange(location: range.location, length: nextLength)
-        aiStreamingDidChangeText = true
-        tv.setSelectedRange(NSRange(location: range.location + nextLength, length: 0))
-        tv.didChangeText()
-        if scrollToEnd {
-            tv.scrollRangeToVisible(NSRange(location: range.location + nextLength, length: 0))
-        }
-    }
-
-    func beginAIBlockRewrite(_ block: AIBlockSelection) -> Bool {
-        guard let tv = textView,
-              let storage = tv.textStorage,
-              isValidRange(block.contentRange, in: storage) else { return false }
-
-        storage.beginEditing()
-        storage.replaceCharacters(in: block.contentRange, with: NSAttributedString(string: ""))
-        storage.endEditing()
-
-        aiStreamingRange = NSRange(location: block.contentRange.location, length: 0)
-        aiStreamingBlockID = block.id
-        aiStreamingActionTitle = block.actionTitle
-        aiStreamingDidChangeText = false
-        tv.setSelectedRange(NSRange(location: block.contentRange.location, length: 0))
-        tv.didChangeText()
-        tv.scrollRangeToVisible(NSRange(location: block.contentRange.location, length: 0))
-        return true
-    }
-
-    func beginAIBlockContinuation(_ block: AIBlockSelection) -> Bool {
-        guard let tv = textView,
-              let storage = tv.textStorage,
-              isValidRange(block.contentRange, in: storage) else { return false }
-
-        let insertionPoint = block.contentRange.location + block.contentRange.length
-        let prefix = block.content.hasSuffix("\n") ? "" : "\n"
-        let attributedPrefix = NSAttributedString(
-            string: prefix,
-            attributes: aiBlockContentAttributes(blockID: block.id)
-        )
-
-        storage.beginEditing()
-        storage.insert(attributedPrefix, at: insertionPoint)
-        storage.endEditing()
-
-        aiStreamingRange = NSRange(location: insertionPoint + attributedPrefix.length, length: 0)
-        aiStreamingBlockID = block.id
-        aiStreamingActionTitle = block.actionTitle
-        aiStreamingDidChangeText = false
-        tv.setSelectedRange(NSRange(location: insertionPoint + attributedPrefix.length, length: 0))
-        tv.didChangeText()
-        tv.scrollRangeToVisible(NSRange(location: insertionPoint + attributedPrefix.length, length: 0))
-        return true
     }
 
     // MARK: - AI BLOCK FORMATTING
 
     private func makeAIBlock(
         actionTitle: String,
+        action: AIEditorAction?,
         blockID: String,
         content: String,
         leadingSpacing: String,
-        trailingSpacing: String
+        trailingSpacing: String,
+        sourceReference: SourceReference?,
+        createdAt: Date
     ) -> NSAttributedString {
         let block = NSMutableAttributedString()
-        block.append(makeAIBlockHeader(actionTitle: actionTitle, blockID: blockID, leadingSpacing: leadingSpacing))
-        block.append(renderMarkdownContent(content, blockID: blockID))
+        block.append(
+            makeAIBlockHeader(
+                actionTitle: actionTitle,
+                action: action,
+                blockID: blockID,
+                leadingSpacing: leadingSpacing,
+                sourceReference: sourceReference,
+                createdAt: createdAt
+            )
+        )
+        block.append(
+            renderMarkdownContent(
+                content,
+                blockID: blockID,
+                action: action,
+                actionTitle: actionTitle,
+                sourceReference: sourceReference,
+                createdAt: createdAt
+            )
+        )
         block.append(NSAttributedString(string: trailingSpacing, attributes: normalTypingAttributes()))
         return block
     }
 
     private func makeAIBlockHeader(
         actionTitle: String,
+        action: AIEditorAction?,
         blockID: String,
-        leadingSpacing: String
+        leadingSpacing: String,
+        sourceReference: SourceReference?,
+        createdAt: Date
     ) -> NSAttributedString {
         let block = NSMutableAttributedString()
         if !leadingSpacing.isEmpty {
             block.append(NSAttributedString(string: leadingSpacing, attributes: normalTypingAttributes()))
         }
 
-        block.append(aiGeneratedBadge(actionTitle: actionTitle, blockID: blockID))
+        block.append(
+            aiGeneratedBadge(
+                actionTitle: actionTitle,
+                action: action,
+                blockID: blockID,
+                sourceReference: sourceReference,
+                createdAt: createdAt
+            )
+        )
         block.append(NSAttributedString(string: "\n", attributes: normalTypingAttributes()))
         return block
     }
 
-    private func aiBlockLabelAttributes(blockID: String, actionTitle: String) -> [NSAttributedString.Key: Any] {
-        var attributes = aiBlockBaseAttributes(blockID: blockID, role: "label")
+    private func aiBlockLabelAttributes(
+        blockID: String,
+        actionTitle: String,
+        action: AIEditorAction?,
+        sourceReference: SourceReference?,
+        createdAt: Date
+    ) -> [NSAttributedString.Key: Any] {
+        var attributes = aiBlockBaseAttributes(
+            blockID: blockID,
+            role: "label",
+            action: action,
+            actionTitle: actionTitle,
+            sourceReference: sourceReference,
+            createdAt: createdAt
+        )
         attributes[.font] = NSFont.systemFont(ofSize: 11, weight: .semibold)
         attributes[.foregroundColor] = NSColor(calibratedRed: 0.38, green: 0.45, blue: 0.48, alpha: 1.0)
         attributes[.backgroundColor] = NSColor(name: nil) { appearance in
@@ -630,12 +542,24 @@ class TextViewBridge {
                 ? NSColor(calibratedRed: 0.24, green: 0.27, blue: 0.29, alpha: 0.88)
                 : NSColor(calibratedRed: 0.90, green: 0.94, blue: 0.95, alpha: 0.96)
         }
-        attributes[.aiBlockActionTitle] = actionTitle
         return attributes
     }
 
-    private func aiBlockContentAttributes(blockID: String) -> [NSAttributedString.Key: Any] {
-        var attributes = aiBlockBaseAttributes(blockID: blockID, role: "content")
+    private func aiBlockContentAttributes(
+        blockID: String,
+        action: AIEditorAction?,
+        actionTitle: String,
+        sourceReference: SourceReference?,
+        createdAt: Date
+    ) -> [NSAttributedString.Key: Any] {
+        var attributes = aiBlockBaseAttributes(
+            blockID: blockID,
+            role: "content",
+            action: action,
+            actionTitle: actionTitle,
+            sourceReference: sourceReference,
+            createdAt: createdAt
+        )
         attributes[.font] = NSFont.systemFont(ofSize: 15.5, weight: .regular)
         attributes[.foregroundColor] = NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -645,7 +569,14 @@ class TextViewBridge {
         return attributes
     }
 
-    private func aiBlockBaseAttributes(blockID: String, role: String) -> [NSAttributedString.Key: Any] {
+    private func aiBlockBaseAttributes(
+        blockID: String,
+        role: String,
+        action: AIEditorAction?,
+        actionTitle: String,
+        sourceReference: SourceReference?,
+        createdAt: Date
+    ) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4.5
         paragraph.paragraphSpacing = 7
@@ -654,15 +585,31 @@ class TextViewBridge {
         paragraph.headIndent = 14
         paragraph.tailIndent = -14
 
-        return [
+        var attributes: [NSAttributedString.Key: Any] = [
             .paragraphStyle: paragraph,
             .aiBlockID: blockID,
             .aiBlockRole: role,
-            .aiBlockInsertedAt: Date()
+            .aiBlockActionTitle: actionTitle,
+            .aiBlockInsertedAt: Date(),
+            .aiBlockCreatedAt: createdAt
         ]
+        if let action {
+            attributes[.aiBlockActionRawValue] = action.rawValue
+        }
+        if let sourceReference,
+           let encodedSourceReference = sourceReference.encodedString() {
+            attributes[.aiBlockSourceReference] = encodedSourceReference
+        }
+        return attributes
     }
 
-    private func aiGeneratedBadge(actionTitle: String, blockID: String) -> NSAttributedString {
+    private func aiGeneratedBadge(
+        actionTitle: String,
+        action: AIEditorAction?,
+        blockID: String,
+        sourceReference: SourceReference?,
+        createdAt: Date
+    ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         if let symbol = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold)) {
@@ -674,7 +621,18 @@ class TextViewBridge {
         }
 
         let label = "\(actionTitle) · Generated"
-        result.append(NSAttributedString(string: label, attributes: aiBlockLabelAttributes(blockID: blockID, actionTitle: actionTitle)))
+        result.append(
+            NSAttributedString(
+                string: label,
+                attributes: aiBlockLabelAttributes(
+                    blockID: blockID,
+                    actionTitle: actionTitle,
+                    action: action,
+                    sourceReference: sourceReference,
+                    createdAt: createdAt
+                )
+            )
+        )
         return result
     }
 
@@ -685,6 +643,9 @@ class TextViewBridge {
         attributes[.aiBlockID] = nil
         attributes[.aiBlockRole] = nil
         attributes[.aiBlockActionTitle] = nil
+        attributes[.aiBlockActionRawValue] = nil
+        attributes[.aiBlockCreatedAt] = nil
+        attributes[.aiBlockSourceReference] = nil
         return attributes
     }
 
@@ -742,11 +703,24 @@ class TextViewBridge {
         return LlamaContext.sanitizeOutputText(cleaned)
     }
 
-    private func renderMarkdownContent(_ content: String, blockID: String) -> NSAttributedString {
+    private func renderMarkdownContent(
+        _ content: String,
+        blockID: String,
+        action: AIEditorAction?,
+        actionTitle: String,
+        sourceReference: SourceReference?,
+        createdAt: Date
+    ) -> NSAttributedString {
         MarkdownRichTextRenderer.render(
             content,
             baseFontSize: 15.5,
-            baseAttributes: aiBlockContentAttributes(blockID: blockID)
+            baseAttributes: aiBlockContentAttributes(
+                blockID: blockID,
+                action: action,
+                actionTitle: actionTitle,
+                sourceReference: sourceReference,
+                createdAt: createdAt
+            )
         )
     }
 
@@ -869,6 +843,29 @@ class TextViewBridge {
             stop.pointee = true
         }
         return title
+    }
+
+    private func sourceInfoForAIBlock(id blockID: String, in storage: NSTextStorage, within fullRange: NSRange) -> AIBlockSourceInfo? {
+        var sourceInfo: AIBlockSourceInfo?
+        storage.enumerateAttributes(in: fullRange) { attributes, _, stop in
+            guard (attributes[.aiBlockID] as? String) == blockID else { return }
+            guard let encodedSourceReference = attributes[.aiBlockSourceReference] as? String,
+                  let sourceReference = SourceReference.decoded(from: encodedSourceReference) else { return }
+            let actionTitle = attributes[.aiBlockActionTitle] as? String ?? "AI"
+            let actionRawValue = attributes[.aiBlockActionRawValue] as? String
+            let createdAt = attributes[.aiBlockCreatedAt] as? Date
+                ?? attributes[.aiBlockInsertedAt] as? Date
+                ?? Date()
+            sourceInfo = AIBlockSourceInfo(
+                blockID: blockID,
+                actionTitle: actionTitle,
+                actionRawValue: actionRawValue,
+                createdAt: createdAt,
+                sourceReference: sourceReference
+            )
+            stop.pointee = true
+        }
+        return sourceInfo
     }
 
     private func isValidRange(_ range: NSRange, in storage: NSTextStorage) -> Bool {

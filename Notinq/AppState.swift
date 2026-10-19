@@ -20,6 +20,74 @@ enum DefaultActionStyle: String, CaseIterable {
     case bulletPoints = "bullet_points"
 }
 
+struct KnowledgeGapExplanationRequest: Identifiable, Equatable {
+    let id: UUID
+    let noteID: UUID
+    let concept: String
+    let reason: String
+    let evidence: String
+    let requestedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        noteID: UUID,
+        concept: String,
+        reason: String,
+        evidence: String,
+        requestedAt: Date = Date()
+    ) {
+        self.id = id
+        self.noteID = noteID
+        self.concept = concept
+        self.reason = reason
+        self.evidence = evidence
+        self.requestedAt = requestedAt
+    }
+
+    var promptText: String {
+        [
+            "Possible knowledge gap: \(concept)",
+            "Reason: \(reason)",
+            "Supporting evidence: \(evidence)",
+            "Explain this concept clearly enough to add to my notes."
+        ].joined(separator: "\n")
+    }
+}
+
+struct StudyProposalRequest: Identifiable, Equatable {
+    let id: UUID
+    let noteID: UUID
+    let content: String
+    let feature: String
+    let sourceConcept: String?
+    let sourceItemID: String?
+    let sourceItemTitle: String?
+    let sourceExcerpt: String
+    let requestedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        noteID: UUID,
+        content: String,
+        feature: String,
+        sourceConcept: String? = nil,
+        sourceItemID: String? = nil,
+        sourceItemTitle: String? = nil,
+        sourceExcerpt: String,
+        requestedAt: Date = Date()
+    ) {
+        self.id = id
+        self.noteID = noteID
+        self.content = content
+        self.feature = feature
+        self.sourceConcept = sourceConcept
+        self.sourceItemID = sourceItemID
+        self.sourceItemTitle = sourceItemTitle
+        self.sourceExcerpt = sourceExcerpt
+        self.requestedAt = requestedAt
+    }
+}
+
 class AppState: ObservableObject {
     @Published var selectedMode: AppMode = .notes
     @Published var folders: [NoteFolder] = []
@@ -29,6 +97,8 @@ class AppState: ObservableObject {
     @Published var isCommandBarOpen: Bool = false
     @Published var isLearningInsightsOpen: Bool = false
     @Published var pendingStudyGenerationRequestID: UUID?
+    @Published var pendingKnowledgeGapExplanationRequest: KnowledgeGapExplanationRequest?
+    @Published var pendingStudyProposalRequest: StudyProposalRequest?
     @Published var isLoggedIn: Bool = false
     @Published var userEmail: String?
     @Published var aiMode: AIMode = .auto
@@ -38,6 +108,7 @@ class AppState: ObservableObject {
     @Published var privateNotesMode: Bool = false
     @Published var autoInsertTranscription: Bool = true
     @Published var useVoiceAsAICommandInput: Bool = false
+    @Published var researchInstrumentationEnabled: Bool = true
 
     private let noteService = NoteService.shared
     private let defaults = UserDefaults.standard
@@ -63,6 +134,10 @@ class AppState: ObservableObject {
         privateNotesMode = defaults.bool(forKey: "privateNotesMode")
         autoInsertTranscription = defaults.object(forKey: "autoInsertTranscription") == nil ? true : defaults.bool(forKey: "autoInsertTranscription")
         useVoiceAsAICommandInput = defaults.bool(forKey: "useVoiceAsAICommandInput")
+        researchInstrumentationEnabled = defaults.object(forKey: ResearchInstrumentationService.enabledPreferenceKey) == nil
+            ? true
+            : defaults.bool(forKey: ResearchInstrumentationService.enabledPreferenceKey)
+        ResearchInstrumentationService.shared.isEnabled = researchInstrumentationEnabled
     }
 
     func persistPreferences() {
@@ -73,6 +148,8 @@ class AppState: ObservableObject {
         defaults.set(privateNotesMode, forKey: "privateNotesMode")
         defaults.set(autoInsertTranscription, forKey: "autoInsertTranscription")
         defaults.set(useVoiceAsAICommandInput, forKey: "useVoiceAsAICommandInput")
+        defaults.set(researchInstrumentationEnabled, forKey: ResearchInstrumentationService.enabledPreferenceKey)
+        ResearchInstrumentationService.shared.isEnabled = researchInstrumentationEnabled
     }
 
     func refreshAuthState() {
@@ -107,6 +184,33 @@ class AppState: ObservableObject {
 
     func consumeStudyGenerationRequest() {
         pendingStudyGenerationRequestID = nil
+    }
+
+    func requestKnowledgeGapExplanation(concept: String, reason: String, evidence: String, noteID: UUID) {
+        selectedNoteID = noteID
+        selectedMode = .notes
+        pendingKnowledgeGapExplanationRequest = KnowledgeGapExplanationRequest(
+            noteID: noteID,
+            concept: concept,
+            reason: reason,
+            evidence: evidence
+        )
+    }
+
+    func consumeKnowledgeGapExplanationRequest(_ requestID: UUID) {
+        guard pendingKnowledgeGapExplanationRequest?.id == requestID else { return }
+        pendingKnowledgeGapExplanationRequest = nil
+    }
+
+    func requestStudyProposal(_ request: StudyProposalRequest) {
+        selectedNoteID = request.noteID
+        selectedMode = .notes
+        pendingStudyProposalRequest = request
+    }
+
+    func consumeStudyProposalRequest(_ requestID: UUID) {
+        guard pendingStudyProposalRequest?.id == requestID else { return }
+        pendingStudyProposalRequest = nil
     }
 
     func createFolder() {

@@ -173,16 +173,22 @@ struct AIActionPromptBuilder {
 
     private func instruction(for action: AIEditorAction) -> String {
         switch action {
+        case .summarize:
+            return "Summarize the selected text into a concise, study-ready overview that preserves the key ideas."
         case .expand:
             return "Expand the selected idea into clearer educational prose. Add useful explanation without unnecessary verbosity."
         case .explain:
             return "Explain the selected content clearly. Include what the concept means and why it matters in concise educational language."
         case .simplify:
             return "Simplify the selected content. Use easier wording and lower the reading difficulty while preserving meaning."
+        case .rewrite:
+            return "Rewrite the selected text for clarity and flow while preserving every fact and the original meaning."
         case .example:
             return "Generate one concrete educational example tied directly to the selected concept."
         case .analogy:
             return "Generate one intuitive educational analogy for the selected concept. Avoid misleading comparisons and clarify the useful limits of the analogy when needed."
+        case .ask:
+            return "Answer the selected question or request using the selected text and surrounding note context."
         case .dontUnderstand:
             return "The student is confused by the selected content. First infer the student's current level from weak concepts, strong concepts, missing prerequisites, mastery, and retrieved note context. Use that level check to calibrate the response, then explain the selected content at that level, filling only the prerequisites needed to understand it."
         }

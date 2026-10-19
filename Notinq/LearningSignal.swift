@@ -58,6 +58,11 @@ struct LearningSignalRecorder {
             confidenceDelta: type == nil ? 0.05 : (type == .lightlyEdited ? 0.02 : -0.02)
         )
         store.append(signal)
+        ResearchInstrumentationService.shared.recordProposalAccepted(
+            proposal: proposal,
+            finalText: finalText,
+            editSignalType: type
+        )
         return signal
     }
 
@@ -65,6 +70,7 @@ struct LearningSignalRecorder {
     func recordRejected(proposal: AIProposal) -> LearningSignal {
         let signal = makeSignal(proposal: proposal, type: .rejected, confidenceDelta: -0.05)
         store.append(signal)
+        ResearchInstrumentationService.shared.recordProposalRejected(proposal: proposal)
         return signal
     }
 
@@ -98,6 +104,7 @@ struct LearningSignalRecorder {
             confidenceDelta: 0
         )
         store.append(signal)
+        ResearchInstrumentationService.shared.recordQuestionGenerated(question: question, questionType: "teachMe")
         return signal
     }
 
@@ -110,6 +117,65 @@ struct LearningSignalRecorder {
             confidenceDelta: evaluation.confidenceDelta
         )
         store.append(signal)
+        ResearchInstrumentationService.shared.recordQuestionAnswered(
+            questionType: "teachMe",
+            correctness: evaluation.rawValue,
+            responseTimeSeconds: 0
+        )
+        return signal
+    }
+
+    @discardableResult
+    func recordStudyQuestionGenerated(question: StudyQuizQuestion, noteID: UUID? = nil) -> LearningSignal {
+        let signal = makeSignal(
+            proposalID: question.id,
+            conceptIDs: question.conceptIDs.isEmpty ? [question.sourceConcept].filter { !$0.isEmpty } : question.conceptIDs,
+            type: .questionAttempted,
+            confidenceDelta: 0
+        )
+        store.append(signal)
+        ResearchInstrumentationService.shared.recordQuestionGenerated(
+            questionType: question.generationAction.rawValue,
+            concept: question.sourceConcept,
+            conceptID: question.conceptIDs.first ?? question.sourceConcept,
+            noteID: noteID
+        )
+        return signal
+    }
+
+    @discardableResult
+    func recordStudyQuestionAnswered(question: StudyQuizQuestion, isCorrect: Bool, noteID: UUID? = nil) -> LearningSignal {
+        let signal = makeSignal(
+            proposalID: question.id,
+            conceptIDs: question.conceptIDs.isEmpty ? [question.sourceConcept].filter { !$0.isEmpty } : question.conceptIDs,
+            type: isCorrect ? .questionCorrect : .questionIncorrect,
+            confidenceDelta: isCorrect ? 0.08 : -0.08
+        )
+        store.append(signal)
+        ResearchInstrumentationService.shared.recordQuestionAnswered(
+            questionType: question.generationAction.rawValue,
+            correctness: isCorrect ? "correct" : "incorrect",
+            responseTimeSeconds: 0,
+            noteID: noteID
+        )
+        return signal
+    }
+
+    @discardableResult
+    func recordStudyFlashcardGenerated(flashcard: StudyFlashcard, noteID: UUID? = nil) -> LearningSignal {
+        let signal = makeSignal(
+            proposalID: flashcard.id,
+            conceptIDs: flashcard.conceptIDs.isEmpty ? [flashcard.sourceConcept].filter { !$0.isEmpty } : flashcard.conceptIDs,
+            type: .questionAttempted,
+            confidenceDelta: 0
+        )
+        store.append(signal)
+        ResearchInstrumentationService.shared.recordQuestionGenerated(
+            questionType: flashcard.generationAction.rawValue,
+            concept: flashcard.sourceConcept,
+            conceptID: flashcard.conceptIDs.first ?? flashcard.sourceConcept,
+            noteID: noteID
+        )
         return signal
     }
 

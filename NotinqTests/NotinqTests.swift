@@ -5,7 +5,7 @@ import XCTest
 
 private func makeProposalBridge(text: String, selection: NSRange) -> (TextViewBridge, NSTextView) {
     let bridge = TextViewBridge()
-    let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+    let textView = AIBlockTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
     textView.isRichText = true
     textView.allowsUndo = true
     textView.isVerticallyResizable = true
@@ -115,6 +115,80 @@ private final class CancellableAIProposalGenerator: AIProposalGenerating {
 
     func isCancelled(_ requestID: UUID) -> Bool {
         tasks[requestID]?.isCancelled ?? false
+    }
+}
+
+private func makeResearchInstrumentation(prefix: String = "research") -> (ResearchInstrumentationService, ResearchEventStore, UserDefaults) {
+    let suiteName = "notinq.tests.\(prefix).\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    let store = ResearchEventStore(
+        defaults: defaults,
+        storageKey: "events.\(UUID().uuidString)"
+    )
+    let service = ResearchInstrumentationService(store: store, defaults: defaults)
+    service.isEnabled = true
+    return (service, store, defaults)
+}
+
+private struct MockTeachMeProvider: TeachMeQuestionGenerating, TeachMeAnswerEvaluating {
+    var questionText: String
+    var evaluation: TeachMeEvaluation
+    var feedback: String
+
+    init(
+        questionText: String = "Mock conceptual question?",
+        evaluation: TeachMeEvaluation = .correct,
+        feedback: String = "Mock feedback."
+    ) {
+        self.questionText = questionText
+        self.evaluation = evaluation
+        self.feedback = feedback
+    }
+
+    func generateQuestion(
+        for candidate: TeachMeConceptCandidate,
+        followUp: Bool,
+        now: Date
+    ) -> TeachMeQuestion {
+        TeachMeQuestion(
+            conceptID: candidate.conceptID,
+            conceptName: candidate.conceptName,
+            question: followUp ? "Mock follow-up for \(candidate.conceptName)?" : questionText,
+            sourceReferences: candidate.sourceReferences,
+            originatingKnowledgeGap: candidate.originatingKnowledgeGap,
+            generatedAt: now
+        )
+    }
+
+    func evaluateAnswer(
+        _ answer: String,
+        for question: TeachMeQuestion,
+        now: Date
+    ) -> TeachMeResponse {
+        TeachMeResponse(
+            questionID: question.id,
+            answer: answer,
+            submittedAt: now,
+            evaluation: evaluation,
+            confidence: 0.73,
+            feedback: feedback
+        )
+    }
+}
+
+private struct MockStudyQuestionProvider: StudyQuestionProviding {
+    var outputs: [StudyQuestionGenerationAction: StudyQuestionGenerationOutput]
+
+    func generateStudyQuestion(
+        action: StudyQuestionGenerationAction,
+        source: StudyQuestionGenerationSource
+    ) async -> StudyQuestionGenerationOutput {
+        outputs[action] ?? AIService.parseStudyQuestionResponse(
+            "{\"question\":\"What is \(source.sourceExcerpt)?\",\"answer\":\"\(source.sourceExcerpt)\",\"concept\":\"\(source.sourceExcerpt)\"}",
+            action: action,
+            source: source
+        )
     }
 }
 
@@ -295,6 +369,19 @@ final class NotinqTests: XCTestCase {
     func testStudyViewUsesEdgeToEdgeOuterChrome() {
         XCTAssertEqual(StudyView.outerChromePadding, 0)
         XCTAssertEqual(StudyView.outerChromeCornerRadius, 0)
+    }
+
+    func testStudyMapSummariesSurfaceLearningWorkflowState() {
+        XCTAssertEqual(StudyView.coverageSummary(missing: 0, partial: 0, hasAnalysis: false), "Analysis not run yet")
+        XCTAssertEqual(StudyView.coverageSummary(missing: 0, partial: 0, hasAnalysis: true, isLoading: true), "Analyzing coverage")
+        XCTAssertEqual(StudyView.coverageSummary(missing: 0, partial: 0), "No gaps in the current analysis")
+        XCTAssertEqual(StudyView.coverageSummary(missing: 2, partial: 1), "2 missing, 1 partial")
+        XCTAssertEqual(StudyView.knowledgeGapSummary(activeCount: 0), "Scan or keep studying")
+        XCTAssertEqual(StudyView.knowledgeGapSummary(activeCount: 3), "3 active")
+        XCTAssertEqual(StudyView.teachMeSummary(for: .idle), "Ready to start")
+        XCTAssertEqual(StudyView.teachMeSummary(for: .feedback), "Feedback ready")
+        XCTAssertEqual(StudyView.practiceSummary(flashcards: 0, quizSets: 0), "Create cards or quiz")
+        XCTAssertEqual(StudyView.practiceSummary(flashcards: 4, quizSets: 2), "4 cards, 2 quizzes")
     }
 
     func testSupplementalStudySectionsBehaveLikeSingleOpenAccordion() {
@@ -633,7 +720,7 @@ final class NotinqTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
         bridge.textView = textView
 
-        bridge.insertAIResult(
+        guard let proposal = bridge.makeAIProposal(
             action: .summarize,
             response: """
             # Heading 1
@@ -644,7 +731,12 @@ final class NotinqTests: XCTestCase {
             - Item two
             """,
             selectionRange: NSRange(location: textView.string.count, length: 0)
-        )
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
 
         XCTAssertFalse(textView.string.contains("**"))
         XCTAssertFalse(textView.string.contains("# "))
@@ -671,11 +763,16 @@ final class NotinqTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
         bridge.textView = textView
 
-        bridge.insertAIResult(
+        guard let proposal = bridge.makeAIProposal(
             action: .summarize,
             response: "Summary:\nA concise result.",
             selectionRange: NSRange(location: textView.string.count, length: 0)
-        )
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
 
         let insertedRange = NSRange(location: 6, length: textView.string.count - 6)
         let highlightDate = textView.textStorage?.attribute(.aiBlockInsertedAt, at: insertedRange.location, effectiveRange: nil) as? Date
@@ -696,7 +793,7 @@ final class NotinqTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
         bridge.textView = textView
 
-        bridge.insertAIResult(
+        guard let proposal = bridge.makeAIProposal(
             action: .ask,
             response: """
             ## Question
@@ -706,7 +803,12 @@ final class NotinqTests: XCTestCase {
             It updates weights using gradients.
             """,
             selectionRange: NSRange(location: textView.string.count, length: 0)
-        )
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
 
         let renderedText = textView.string
         XCTAssertFalse(renderedText.contains("##"))
@@ -891,6 +993,772 @@ final class NotinqTests: XCTestCase {
         XCTAssertNotNil(insertedAt)
     }
 
+    func testAcceptedAIProposalAttachesProvenanceAttributes() {
+        let sourceRange = NSRange(location: 6, length: 4)
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: sourceRange)
+        guard let proposal = bridge.makeAIProposal(
+            action: .explain,
+            response: "Beta is the second named value in this sequence.",
+            selectionRange: textView.selectedRange(),
+            provenance: AIProposalProvenance(
+                sourceNoteRange: sourceRange,
+                transcriptReference: "00:01:24",
+                slideReference: "Slide 7"
+            )
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
+
+        let insertedRange = (textView.string as NSString).range(of: "Beta is the second")
+        guard let block = bridge.aiBlockSelection(containing: insertedRange.location),
+              let sourceInfo = block.sourceInfo else {
+            XCTFail("Expected AI block provenance")
+            return
+        }
+
+        XCTAssertEqual(sourceInfo.displayActionTitle, "Explain")
+        XCTAssertEqual(sourceInfo.actionTitle, "Explanation")
+        XCTAssertEqual(sourceInfo.sourceReference.sourceTextExcerpt, "beta")
+        XCTAssertEqual(sourceInfo.sourceReference.noteRange, sourceRange)
+        XCTAssertEqual(sourceInfo.sourceReference.transcriptTimestamp, "00:01:24")
+        XCTAssertEqual(sourceInfo.sourceReference.slideReference, "Slide 7")
+        XCTAssertEqual(sourceInfo.sourceReference.locationLabel, "Characters 6-10")
+    }
+
+    func testAIBlockProvenanceSurvivesAttributedPersistenceReload() throws {
+        let sourceRange = NSRange(location: 6, length: 4)
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta gamma", selection: sourceRange)
+        guard let proposal = bridge.makeAIProposal(
+            action: .simplify,
+            response: "Beta means this part in simpler terms.",
+            selectionRange: textView.selectedRange(),
+            provenance: AIProposalProvenance(sourceNoteRange: sourceRange)
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
+        let archived = try NSKeyedArchiver.archivedData(
+            withRootObject: NSAttributedString(attributedString: textView.attributedString()),
+            requiringSecureCoding: false
+        )
+        guard let reloaded = try NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archived) as? NSAttributedString else {
+            XCTFail("Expected archived attributed string to reload")
+            return
+        }
+
+        let reloadBridge = TextViewBridge()
+        let reloadTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+        reloadTextView.textStorage?.setAttributedString(reloaded)
+        reloadBridge.textView = reloadTextView
+
+        let insertedRange = (reloadTextView.string as NSString).range(of: "Beta means")
+        guard let block = reloadBridge.aiBlockSelection(containing: insertedRange.location),
+              let sourceInfo = block.sourceInfo else {
+            XCTFail("Expected reloaded AI block provenance")
+            return
+        }
+
+        XCTAssertEqual(sourceInfo.displayActionTitle, "Simplify")
+        XCTAssertEqual(sourceInfo.sourceReference.sourceTextExcerpt, "beta")
+        XCTAssertEqual(sourceInfo.sourceReference.noteRange, sourceRange)
+    }
+
+    func testSourceReferenceCodablePreservesSourceRange() throws {
+        let reference = SourceReference(
+            noteRange: NSRange(location: 512, length: 128),
+            sourceTextExcerpt: "The central limit theorem becomes more reliable as sample size increases.",
+            transcriptTimestamp: "00:12:08",
+            slideReference: "Slide 4",
+            studyFeature: "Flashcards",
+            sourceConcept: "Central Limit Theorem",
+            sourceItemID: "card-1",
+            sourceItemTitle: "Why does sample size matter?"
+        )
+
+        let data = try JSONEncoder().encode(reference)
+        let decoded = try JSONDecoder().decode(SourceReference.self, from: data)
+
+        XCTAssertEqual(decoded, reference)
+        XCTAssertEqual(decoded.locationLabel, "Characters 512-640")
+    }
+
+    func testStudyProposalRequestDoesNotDirectlyMutateNote() {
+        let appState = AppState()
+        let noteID = UUID()
+        appState.folders = [
+            NoteFolder(
+                title: "Study",
+                notes: [NoteFile(id: noteID, title: "Biology", content: "ATP stores energy.")]
+            )
+        ]
+        appState.selectedNoteID = noteID
+
+        appState.requestStudyProposal(
+            StudyProposalRequest(
+                noteID: noteID,
+                content: "Generated flashcard content",
+                feature: "Flashcards",
+                sourceConcept: "ATP",
+                sourceItemID: "card-1",
+                sourceItemTitle: "ATP recall",
+                sourceExcerpt: "ATP stores energy."
+            )
+        )
+
+        XCTAssertEqual(appState.noteContent(for: noteID), "ATP stores energy.")
+        XCTAssertEqual(appState.selectedMode, .notes)
+        XCTAssertEqual(appState.pendingStudyProposalRequest?.feature, "Flashcards")
+    }
+
+    func testStudyProposalRejectLeavesDocumentUnchanged() {
+        let (bridge, textView) = makeProposalBridge(text: "ATP stores energy.", selection: NSRange(location: 18, length: 0))
+        let proposal = AIProposal(
+            action: .ask,
+            originalText: "ATP stores energy.",
+            generatedText: "Flashcard\nQ: What does ATP do?\nA: Stores energy.",
+            insertionRange: textView.selectedRange(),
+            originalSelectionRange: textView.selectedRange(),
+            provenance: AIProposalProvenance(
+                sourceNoteRange: textView.selectedRange(),
+                studyFeature: "Flashcards",
+                sourceConcept: "ATP",
+                sourceItemID: "card-1",
+                sourceItemTitle: "ATP recall"
+            )
+        )
+
+        _ = bridge.rejectAIProposal(proposal)
+
+        XCTAssertEqual(textView.string, "ATP stores energy.")
+    }
+
+    func testStudyProposalEditThenAcceptPreservesProvenance() {
+        let (bridge, textView) = makeProposalBridge(text: "ATP stores energy.", selection: NSRange(location: 18, length: 0))
+        let proposal = AIProposal(
+            action: .ask,
+            originalText: "ATP stores energy.",
+            generatedText: "Flashcard\nQ: What does ATP do?\nA: Stores energy.",
+            insertionRange: textView.selectedRange(),
+            originalSelectionRange: textView.selectedRange(),
+            provenance: AIProposalProvenance(
+                sourceNoteRange: textView.selectedRange(),
+                studyFeature: "Flashcards",
+                sourceConcept: "ATP",
+                sourceItemID: "card-1",
+                sourceItemTitle: "ATP recall"
+            )
+        )
+
+        let edited = bridge.editAIProposal(proposal, generatedText: "Edited flashcard\nQ: What does ATP do?\nA: Stores usable cellular energy.")
+        _ = bridge.acceptAIProposal(edited, editedText: edited.generatedText)
+
+        XCTAssertTrue(textView.string.contains("Edited flashcard"))
+        let insertedRange = (textView.string as NSString).range(of: "Edited flashcard")
+        guard let block = bridge.aiBlockSelection(containing: insertedRange.location),
+              let sourceInfo = block.sourceInfo else {
+            XCTFail("Expected accepted Study proposal provenance")
+            return
+        }
+        XCTAssertEqual(sourceInfo.displayActionTitle, "Ask AI")
+        XCTAssertEqual(sourceInfo.sourceReference.studyFeature, "Flashcards")
+        XCTAssertEqual(sourceInfo.sourceReference.sourceConcept, "ATP")
+        XCTAssertEqual(sourceInfo.sourceReference.sourceItemID, "card-1")
+        XCTAssertEqual(sourceInfo.sourceReference.sourceItemTitle, "ATP recall")
+    }
+
+    func testResearchInstrumentationRecordsStudyProposalMetadata() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "study-proposal")
+        let proposal = AIProposal(
+            action: .ask,
+            originalText: "source excerpt",
+            generatedText: "generated study content",
+            insertionRange: NSRange(location: 0, length: 0),
+            originalSelectionRange: NSRange(location: 0, length: 0),
+            provenance: AIProposalProvenance(
+                studyFeature: "Quiz Generator",
+                sourceConcept: "p-value",
+                sourceItemID: "question-1",
+                sourceItemTitle: "p-value application"
+            )
+        )
+
+        service.recordProposalGenerated(proposal: proposal, latency: nil)
+        let event = store.allEvents().first(where: { $0.eventType == .proposalGenerated })
+
+        XCTAssertEqual(event?.metadata["studyFeature"], .string("Quiz Generator"))
+        XCTAssertEqual(event?.metadata["sourceConcept"], .string("p-value"))
+        XCTAssertEqual(event?.metadata["sourceItemID"], .string("question-1"))
+        XCTAssertEqual(event?.metadata["sourceItemTitle"], .string("p-value application"))
+    }
+
+    func testResearchInstrumentationRecordsProposalEventsWithoutNoteText() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "proposal")
+        let noteID = UUID()
+        let proposal = AIProposal(
+            action: .explain,
+            originalText: "private source text",
+            generatedText: "private generated explanation",
+            insertionRange: NSRange(location: 4, length: 0),
+            originalSelectionRange: NSRange(location: 0, length: 4),
+            originatingNoteID: noteID,
+            originatingRequestID: UUID()
+        )
+
+        service.recordProposalGenerated(proposal: proposal, latency: 0.25)
+        service.recordProposalAccepted(proposal: proposal, finalText: "edited answer", editSignalType: .lightlyEdited)
+        service.recordProposalRejected(proposal: proposal)
+
+        let events = store.allEvents()
+        XCTAssertTrue(events.contains { $0.eventType == .proposalGenerated })
+        XCTAssertTrue(events.contains { $0.eventType == .proposalAccepted })
+        XCTAssertTrue(events.contains { $0.eventType == .proposalEdited })
+        XCTAssertTrue(events.contains { $0.eventType == .proposalRejected })
+        XCTAssertEqual(events.first?.noteID, noteID)
+        XCTAssertFalse(store.jsonExportString().contains("private source text"))
+        XCTAssertFalse(store.jsonExportString().contains("private generated explanation"))
+    }
+
+    func testResearchInstrumentationRecordsTeachMeEvents() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "teachme")
+        let now = Date(timeIntervalSince1970: 10)
+        let question = TeachMeQuestion(
+            conceptID: "chain rule",
+            conceptName: "Chain Rule",
+            question: "Why does it matter?",
+            generatedAt: now
+        )
+        let session = TeachMeSession(
+            state: .question,
+            activeConceptID: "chain rule",
+            activeConceptName: "Chain Rule",
+            activeQuestion: question,
+            startedAt: now,
+            updatedAt: now
+        )
+        let response = TeachMeResponse(
+            questionID: question.id,
+            answer: "private answer",
+            submittedAt: now.addingTimeInterval(12),
+            evaluation: .partiallyCorrect,
+            confidence: 0.6,
+            feedback: "private feedback"
+        )
+
+        service.recordTeachMeStarted(session: session)
+        service.recordTeachMeQuestionAnswered(question: question, response: response, session: session)
+        service.recordTeachMeCompleted(session: session)
+
+        let eventTypes = store.allEvents().map(\.eventType)
+        XCTAssertTrue(eventTypes.contains(.teachMeStarted))
+        XCTAssertTrue(eventTypes.contains(.teachMeQuestionAnswered))
+        XCTAssertTrue(eventTypes.contains(.teachMeCompleted))
+        XCTAssertTrue(eventTypes.contains(.questionGenerated))
+        XCTAssertTrue(eventTypes.contains(.questionAnswered))
+        XCTAssertFalse(store.jsonExportString().contains("private answer"))
+        XCTAssertFalse(store.jsonExportString().contains("private feedback"))
+    }
+
+    func testResearchInstrumentationRecordsKnowledgeGapEvents() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "gaps")
+
+        service.recordKnowledgeGapDetected(concept: "Chain Rule", heuristic: "adaptiveContext")
+        service.recordKnowledgeGapIgnored(concept: "Limits", heuristic: "planner")
+        service.recordKnowledgeGapResolved(concept: "Derivatives", resolutionMethod: "teachMe")
+
+        let eventTypes = store.allEvents().map(\.eventType)
+        XCTAssertEqual(eventTypes, [.knowledgeGapDetected, .knowledgeGapIgnored, .knowledgeGapResolved])
+        XCTAssertEqual(store.allEvents().first?.metadata["detectionHeuristic"], .string("adaptiveContext"))
+    }
+
+    func testKnowledgeGapDisplayModelUsesActiveGapMetadata() {
+        let gap = StudyKnowledgeGap(
+            title: "p-value",
+            description: "Concept referenced repeatedly without explanation.",
+            evidence: "Mentioned in three statistics notes.",
+            priority: 3.0
+        )
+
+        let model = KnowledgeGapDisplayModel(gap: gap)
+
+        XCTAssertEqual(model.concept, "p-value")
+        XCTAssertEqual(model.reason, "Concept referenced repeatedly without explanation.")
+        XCTAssertEqual(model.supportingEvidenceSummary, "Mentioned in three statistics notes.")
+        XCTAssertEqual(model.status, .active)
+    }
+
+    func testKnowledgeGapIgnoreAndMarkUnderstoodStatuses() {
+        let gap = StudyKnowledgeGap(
+            title: "Confidence Interval",
+            description: "Used without definition.",
+            evidence: "Appears across notes.",
+            priority: 2.0
+        )
+
+        let ignored = gap.updatingStatus(.ignored)
+        let resolved = gap.updatingStatus(.resolved, resolutionMethod: "markedUnderstood")
+
+        XCTAssertEqual(ignored.status, .ignored)
+        XCTAssertNil(ignored.resolutionMethod)
+        XCTAssertEqual(resolved.status, .resolved)
+        XCTAssertEqual(resolved.resolutionMethod, "markedUnderstood")
+    }
+
+    func testKnowledgeGapPersistenceRoundTripPreservesStatusAndMetadata() throws {
+        let gap = StudyKnowledgeGap(
+            title: "Chain Rule",
+            description: "Prerequisite appears missing.",
+            evidence: "Derivative notes reference it.",
+            priority: 4.0,
+            status: .resolved,
+            detectionHeuristic: "studyKnowledgeGapAnalysis",
+            resolutionMethod: "markedUnderstood"
+        )
+
+        let data = try JSONEncoder().encode([gap])
+        let reloaded = try JSONDecoder().decode([StudyKnowledgeGap].self, from: data)
+
+        XCTAssertEqual(reloaded.first?.title, "Chain Rule")
+        XCTAssertEqual(reloaded.first?.status, .resolved)
+        XCTAssertEqual(reloaded.first?.resolutionMethod, "markedUnderstood")
+        XCTAssertEqual(reloaded.first?.detectionHeuristic, "studyKnowledgeGapAnalysis")
+    }
+
+    func testKnowledgeGapMergePreventsDuplicatesAndPreservesIgnoredState() {
+        let existing = StudyKnowledgeGap(
+            title: "P Value",
+            description: "Old reason",
+            evidence: "Old evidence",
+            priority: 1.0,
+            status: .ignored
+        )
+        let detected = StudyKnowledgeGap(
+            title: "p-value",
+            description: "New reason",
+            evidence: "New evidence",
+            priority: 5.0
+        )
+
+        let merged = StudyKnowledgeGap.merge(existing: [existing], detected: [detected])
+
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.status, .ignored)
+        XCTAssertEqual(merged.first?.description, "New reason")
+        XCTAssertEqual(merged.first?.priority, 5.0)
+    }
+
+    func testKnowledgeGapReanalysisAddsNewActiveGapWithoutRevivingResolvedGap() {
+        let resolved = StudyKnowledgeGap(
+            title: "Limits",
+            description: "Previously detected.",
+            evidence: "Old evidence",
+            priority: 2.0,
+            status: .resolved,
+            resolutionMethod: "markedUnderstood"
+        )
+        let redetectedResolved = StudyKnowledgeGap(
+            title: "limits",
+            description: "Still mentioned.",
+            evidence: "New evidence",
+            priority: 4.0
+        )
+        let newGap = StudyKnowledgeGap(
+            title: "Derivatives",
+            description: "Needed for the current note.",
+            evidence: "Mentioned in notebook.",
+            priority: 3.0
+        )
+
+        let merged = StudyKnowledgeGap.merge(existing: [resolved], detected: [redetectedResolved, newGap])
+
+        XCTAssertEqual(merged.count, 2)
+        XCTAssertEqual(merged.first(where: { $0.normalizedKey == StudyKnowledgeGap.normalizedKey(for: "Limits") })?.status, .resolved)
+        XCTAssertEqual(merged.first(where: { $0.normalizedKey == StudyKnowledgeGap.normalizedKey(for: "Derivatives") })?.status, .active)
+    }
+
+    func testKnowledgeGapExplainRequestCreatesProposalWithoutMutatingDocument() {
+        let noteID = UUID()
+        let request = KnowledgeGapExplanationRequest(
+            noteID: noteID,
+            concept: "p-value",
+            reason: "Concept referenced repeatedly without explanation.",
+            evidence: "Mentioned in three statistics notes."
+        )
+        let (bridge, textView) = makeProposalBridge(text: "Existing statistics notes.", selection: NSRange(location: 26, length: 0))
+        let generator = MockAIProposalGenerator(response: "A p-value is the probability of seeing results at least this extreme if the null hypothesis were true.")
+        let coordinator = AIProposalCoordinator(bridge: bridge, generator: generator)
+
+        coordinator.begin(
+            action: .explain,
+            selection: (text: request.promptText, range: textView.selectedRange()),
+            noteContext: textView.string,
+            noteID: noteID
+        )
+
+        XCTAssertEqual(textView.string, "Existing statistics notes.")
+        XCTAssertEqual(generator.action, .explain)
+        XCTAssertTrue(generator.selectedText.contains("Possible knowledge gap: p-value"))
+        XCTAssertEqual(coordinator.proposal?.action, .explain)
+        XCTAssertEqual(coordinator.proposal?.status, .pending)
+    }
+
+    func testKnowledgeGapInstrumentationEventsForDetectedIgnoredResolved() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "gap-lifecycle")
+
+        service.recordKnowledgeGapDetected(concept: "p-value", heuristic: "studyKnowledgeGapAnalysis")
+        service.recordKnowledgeGapIgnored(concept: "p-value", heuristic: "studyKnowledgeGapAnalysis")
+        service.recordKnowledgeGapResolved(concept: "p-value", resolutionMethod: "markedUnderstood")
+
+        XCTAssertEqual(
+            store.allEvents().map(\.eventType),
+            [.knowledgeGapDetected, .knowledgeGapIgnored, .knowledgeGapResolved]
+        )
+        XCTAssertEqual(store.allEvents().last?.metadata["resolutionMethod"], .string("markedUnderstood"))
+    }
+
+    func testRecallQuestionGenerationUsesMockProvider() async {
+        let source = makeStudyQuestionSource()
+        let expected = StudyQuizQuestion(
+            type: .shortAnswer,
+            prompt: "What does ATP store?",
+            correctAnswer: "Usable cellular energy.",
+            sourceConcept: "ATP",
+            cognitiveLevel: .recall,
+            sourceReferences: [StudyQuestionSourceReference(noteID: source.noteID, range: source.sourceRange, excerpt: source.sourceExcerpt)],
+            generationAction: .recallQuestion
+        )
+        let engine = StudyQuestionGenerationEngine(
+            provider: MockStudyQuestionProvider(outputs: [.recallQuestion: StudyQuestionGenerationOutput(question: expected)])
+        )
+
+        let output = await engine.generate(action: .recallQuestion, source: source)
+
+        XCTAssertEqual(output.question?.prompt, "What does ATP store?")
+        XCTAssertEqual(output.question?.cognitiveLevel, .recall)
+        XCTAssertEqual(output.question?.generationAction, .recallQuestion)
+        XCTAssertEqual(output.question?.sourceReferences.first?.excerpt, source.sourceExcerpt)
+    }
+
+    func testUnderstandingQuestionGenerationUsesMockProvider() async {
+        let source = makeStudyQuestionSource()
+        let expected = StudyQuizQuestion(
+            type: .conceptualUnderstanding,
+            prompt: "Why does ATP hydrolysis release usable energy?",
+            correctAnswer: "Because bond rearrangement leads to lower-energy products.",
+            sourceConcept: "ATP hydrolysis",
+            cognitiveLevel: .understanding,
+            generationAction: .understandingQuestion
+        )
+        let engine = StudyQuestionGenerationEngine(
+            provider: MockStudyQuestionProvider(outputs: [.understandingQuestion: StudyQuestionGenerationOutput(question: expected)])
+        )
+
+        let output = await engine.generate(action: .understandingQuestion, source: source)
+
+        XCTAssertEqual(output.question?.type, .conceptualUnderstanding)
+        XCTAssertEqual(output.question?.cognitiveLevel, .understanding)
+        XCTAssertEqual(output.question?.generationAction, .understandingQuestion)
+    }
+
+    func testApplicationQuestionGenerationUsesMockProvider() async {
+        let source = makeStudyQuestionSource()
+        let expected = StudyQuizQuestion(
+            type: .application,
+            prompt: "How would a muscle cell use ATP during contraction?",
+            correctAnswer: "ATP powers molecular movement in contraction.",
+            sourceConcept: "ATP",
+            cognitiveLevel: .application,
+            generationAction: .applicationQuestion
+        )
+        let engine = StudyQuestionGenerationEngine(
+            provider: MockStudyQuestionProvider(outputs: [.applicationQuestion: StudyQuestionGenerationOutput(question: expected)])
+        )
+
+        let output = await engine.generate(action: .applicationQuestion, source: source)
+
+        XCTAssertEqual(output.question?.type, .application)
+        XCTAssertEqual(output.question?.cognitiveLevel, .application)
+        XCTAssertEqual(output.question?.generationAction, .applicationQuestion)
+    }
+
+    func testFlashcardGenerationUsesMockProvider() async {
+        let source = makeStudyQuestionSource()
+        let expected = StudyFlashcard(
+            type: .questionAnswer,
+            front: "What is ATP?",
+            back: "The cell's usable energy carrier.",
+            whyItMatters: "It links energy release to cell work.",
+            conceptIDs: ["ATP"],
+            sourceConcept: "ATP",
+            cognitiveLevel: .recall,
+            sourceReferences: [StudyQuestionSourceReference(noteID: source.noteID, range: source.sourceRange, excerpt: source.sourceExcerpt)],
+            generationAction: .generateFlashcard
+        )
+        let engine = StudyQuestionGenerationEngine(
+            provider: MockStudyQuestionProvider(outputs: [.generateFlashcard: StudyQuestionGenerationOutput(flashcard: expected)])
+        )
+
+        let output = await engine.generate(action: .generateFlashcard, source: source)
+
+        XCTAssertEqual(output.flashcard?.front, "What is ATP?")
+        XCTAssertEqual(output.flashcard?.sourceConcept, "ATP")
+        XCTAssertEqual(output.flashcard?.sourceReferences.first?.rangeLocation, source.sourceRange.location)
+    }
+
+    func testGeneratedQuestionPersistenceRoundTripPreservesProvenance() throws {
+        let source = makeStudyQuestionSource()
+        var studyData = NoteStudyData()
+        studyData.quizSets = [
+            StudyQuizSet(
+                title: "Generated Questions",
+                questions: [
+                    StudyQuizQuestion(
+                        type: .application,
+                        prompt: "How would ATP support transport?",
+                        correctAnswer: "By powering active transport.",
+                        sourceConcept: "ATP",
+                        cognitiveLevel: .application,
+                        sourceReferences: [StudyQuestionSourceReference(noteID: source.noteID, range: source.sourceRange, excerpt: source.sourceExcerpt)],
+                        generationAction: .applicationQuestion
+                    )
+                ]
+            )
+        ]
+        studyData.flashcards = [
+            StudyFlashcard(
+                type: .questionAnswer,
+                front: "What is ATP?",
+                back: "Energy carrier.",
+                sourceConcept: "ATP",
+                sourceReferences: [StudyQuestionSourceReference(noteID: source.noteID, range: source.sourceRange, excerpt: source.sourceExcerpt)]
+            )
+        ]
+
+        let data = try JSONEncoder().encode(studyData)
+        let decoded = try JSONDecoder().decode(NoteStudyData.self, from: data)
+
+        XCTAssertEqual(decoded.quizSets.first?.questions.first?.sourceConcept, "ATP")
+        XCTAssertEqual(decoded.quizSets.first?.questions.first?.cognitiveLevel, .application)
+        XCTAssertEqual(decoded.quizSets.first?.questions.first?.generationAction, .applicationQuestion)
+        XCTAssertEqual(decoded.flashcards.first?.sourceReferences.first?.excerpt, source.sourceExcerpt)
+    }
+
+    func testGeneratedQuestionAnswerTracking() {
+        let question = StudyQuizQuestion(
+            type: .shortAnswer,
+            prompt: "What does ATP do?",
+            correctAnswer: "Stores usable energy.",
+            sourceConcept: "ATP"
+        )
+
+        let answered = question.recordingAnswer("It stores usable energy.", isCorrect: true)
+
+        XCTAssertEqual(answered.answerHistory.count, 1)
+        XCTAssertEqual(answered.answerHistory.first?.answer, "It stores usable energy.")
+        XCTAssertEqual(answered.answerHistory.first?.isCorrect, true)
+    }
+
+    func testGeneratedQuestionLearningSignalsRecorded() {
+        let suiteName = "notinq.tests.study-question-signals.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = LearningSignalStore(defaults: defaults, storageKey: "signals")
+        let recorder = LearningSignalRecorder(store: store)
+        let question = StudyQuizQuestion(
+            type: .shortAnswer,
+            prompt: "What does ATP do?",
+            correctAnswer: "Stores usable energy.",
+            conceptIDs: ["ATP"],
+            sourceConcept: "ATP",
+            generationAction: .recallQuestion
+        )
+
+        recorder.recordStudyQuestionGenerated(question: question)
+        recorder.recordStudyQuestionAnswered(question: question, isCorrect: true)
+
+        XCTAssertEqual(store.allSignals().map(\.signalType), [.questionAttempted, .questionCorrect])
+        XCTAssertEqual(store.allSignals().first?.conceptIDs, ["ATP"])
+
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    private func makeStudyQuestionSource() -> StudyQuestionGenerationSource {
+        let noteID = UUID()
+        let selected = "ATP stores usable cellular energy."
+        return StudyQuestionGenerationSource(
+            noteID: noteID,
+            selectedText: selected,
+            noteContext: "Cellular respiration produces ATP. \(selected)",
+            sourceRange: NSRange(location: 31, length: (selected as NSString).length)
+        )
+    }
+
+    func testResearchInstrumentationDisabledRecordsNoEvents() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "disabled")
+        service.isEnabled = false
+
+        service.record(.proposalGenerated, metadata: ["aiActionType": .string("explain")])
+
+        XCTAssertTrue(store.allEvents().isEmpty)
+    }
+
+    func testResearchEventPersistenceRoundTripPreservesSchemaVersion() {
+        let suiteName = "notinq.tests.research.persistence.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let storageKey = "events"
+        let sessionID = UUID()
+        let event = ResearchEvent(
+            schemaVersion: 42,
+            eventType: .questionAnswered,
+            metadata: ["correctness": .string("correct")],
+            sessionID: sessionID
+        )
+        let writer = ResearchEventStore(defaults: defaults, storageKey: storageKey)
+        writer.append(event)
+
+        let reader = ResearchEventStore(defaults: defaults, storageKey: storageKey)
+        let reloaded = reader.allEvents()
+
+        XCTAssertEqual(reloaded.count, 1)
+        XCTAssertEqual(reloaded.first?.id, event.id)
+        XCTAssertEqual(reloaded.first?.schemaVersion, 42)
+        XCTAssertEqual(reloaded.first?.eventType, .questionAnswered)
+        XCTAssertEqual(reloaded.first?.metadata["correctness"], .string("correct"))
+        XCTAssertEqual(reloaded.first?.sessionID, sessionID)
+    }
+
+    func testResearchEventJSONExportContainsInstrumentationOnly() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "json")
+        service.recordWritingMetrics(
+            manualCharactersWritten: 12,
+            aiCharactersAccepted: 40,
+            aiCharactersEdited: 8
+        )
+
+        let json = store.jsonExportString()
+
+        XCTAssertTrue(json.contains("writingMetricsUpdated"))
+        XCTAssertTrue(json.contains("aiCharactersAccepted"))
+        XCTAssertFalse(json.contains("note content"))
+    }
+
+    func testResearchEventCSVExportContainsExpectedColumns() {
+        let (service, store, _) = makeResearchInstrumentation(prefix: "csv")
+        service.recordQuestionAnswered(questionType: "quiz", correctness: "correct", responseTimeSeconds: 9)
+
+        let csv = store.csvExportString()
+
+        XCTAssertTrue(csv.hasPrefix("id,schemaVersion,timestamp,eventType,sessionID,noteID,metadata"))
+        XCTAssertTrue(csv.contains("questionAnswered"))
+        XCTAssertTrue(csv.contains("responseTimeSeconds"))
+    }
+
+    func testResearchDatasetExportGenerationIncludesJSONAndCSV() throws {
+        let (service, _, _) = makeResearchInstrumentation(prefix: "dataset-export")
+        service.recordProposalGenerated(
+            proposal: AIProposal(
+                action: .explain,
+                originalText: "private selected note text",
+                generatedText: "private generated explanation",
+                insertionRange: NSRange(location: 0, length: 4),
+                originalSelectionRange: NSRange(location: 0, length: 4)
+            ),
+            latency: 0.25
+        )
+        service.recordQuestionAnswered(questionType: "recall", correctness: "correct", responseTimeSeconds: 6)
+
+        let json = try XCTUnwrap(String(data: try service.jsonExportData(), encoding: .utf8))
+        let csv = try XCTUnwrap(String(data: service.csvExportData(), encoding: .utf8))
+
+        XCTAssertTrue(json.contains("proposalGenerated"))
+        XCTAssertTrue(json.contains("questionAnswered"))
+        XCTAssertTrue(csv.contains("proposalGenerated"))
+        XCTAssertTrue(csv.contains("questionAnswered"))
+        XCTAssertFalse(json.contains("private selected note text"))
+        XCTAssertFalse(json.contains("private generated explanation"))
+        XCTAssertFalse(csv.contains("private selected note text"))
+        XCTAssertFalse(csv.contains("private generated explanation"))
+    }
+
+    func testResearchEventStatisticsCountsWorkflowEvents() {
+        let (service, _, _) = makeResearchInstrumentation(prefix: "statistics")
+        service.record(.proposalGenerated)
+        service.record(.proposalAccepted)
+        service.record(.proposalRejected)
+        service.record(.proposalEdited)
+        service.recordKnowledgeGapDetected(concept: "p-value", heuristic: "repeatedReference")
+        service.recordKnowledgeGapResolved(concept: "p-value", resolutionMethod: "markedUnderstood")
+        service.recordQuestionAnswered(questionType: "understanding", correctness: "partial", responseTimeSeconds: 14)
+        service.record(.teachMeCompleted)
+
+        let statistics = service.statistics()
+
+        XCTAssertEqual(statistics.totalEvents, 8)
+        XCTAssertEqual(statistics.proposalsGenerated, 1)
+        XCTAssertEqual(statistics.proposalsAccepted, 1)
+        XCTAssertEqual(statistics.proposalsRejected, 1)
+        XCTAssertEqual(statistics.proposalsEdited, 1)
+        XCTAssertEqual(statistics.knowledgeGapsDetected, 1)
+        XCTAssertEqual(statistics.knowledgeGapsResolved, 1)
+        XCTAssertEqual(statistics.questionsAnswered, 1)
+        XCTAssertEqual(statistics.teachMeSessionsCompleted, 1)
+    }
+
+    func testDisabledResearchInstrumentationExportsNoEvents() throws {
+        let (service, _, _) = makeResearchInstrumentation(prefix: "disabled-export")
+        service.isEnabled = false
+
+        service.record(.proposalGenerated)
+        service.recordKnowledgeGapDetected(concept: "p-value", heuristic: "repeatedReference")
+        service.recordQuestionAnswered(questionType: "recall", correctness: "incorrect", responseTimeSeconds: 5)
+
+        let json = try XCTUnwrap(String(data: try service.jsonExportData(), encoding: .utf8))
+        let csv = try XCTUnwrap(String(data: service.csvExportData(), encoding: .utf8))
+        let statistics = service.statistics()
+
+        XCTAssertEqual(statistics, .empty)
+        XCTAssertEqual(json, "[]")
+        XCTAssertTrue(csv.hasPrefix("id,schemaVersion,timestamp,eventType,sessionID,noteID,metadata"))
+        XCTAssertFalse(csv.contains("proposalGenerated"))
+        XCTAssertFalse(csv.contains("knowledgeGapDetected"))
+        XCTAssertFalse(csv.contains("questionAnswered"))
+    }
+
+    func testAcceptedAIProposalCanBeUndone() {
+        let (bridge, textView) = makeProposalBridge(text: "Alpha beta", selection: NSRange(location: 6, length: 4))
+        guard let proposal = bridge.makeAIProposal(
+            action: .summarize,
+            response: "A short summary.",
+            selectionRange: textView.selectedRange()
+        ) else {
+            XCTFail("Expected proposal")
+            return
+        }
+
+        _ = bridge.acceptAIProposal(proposal)
+        XCTAssertTrue(textView.string.contains("A short summary."))
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
+
+        textView.undoManager?.undo()
+
+        XCTAssertEqual(textView.string, "Alpha beta")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 6, length: 4))
+    }
+
+    func testLegacyToolbarActionsAreProposalActions() {
+        XCTAssertTrue(AIEditorAction.allCases.contains(.summarize))
+        XCTAssertTrue(AIEditorAction.allCases.contains(.rewrite))
+        XCTAssertTrue(AIEditorAction.allCases.contains(.ask))
+        XCTAssertEqual(AIEditorAction.summarize.blockTitle, "Summary")
+        XCTAssertEqual(AIEditorAction.rewrite.blockTitle, "Rewrite")
+        XCTAssertEqual(AIEditorAction.ask.blockTitle, "Ask AI")
+    }
+
     func testExpandTapCreatesAIProposalWithMockResponse() {
         let noteID = UUID()
         let (bridge, _) = makeProposalBridge(text: "Photosynthesis uses light.", selection: NSRange(location: 0, length: 14))
@@ -935,6 +1803,27 @@ final class NotinqTests: XCTestCase {
         XCTAssertTrue(AIProposalPreviewView.actionLabels.contains("Edit"))
         XCTAssertTrue(AIProposalPreviewView.actionLabels.contains("Reject"))
         XCTAssertEqual(textView.string, "Alpha beta gamma")
+    }
+
+    func testProposalPreviewMetadataExplainsProposalScopeAndEvidence() {
+        var context = makeSourceBackedAdaptiveContext()
+        context.identifiedKnowledgeGaps = ["Chain Rule"]
+        let proposal = AIProposal(
+            action: .dontUnderstand,
+            originalText: "Backpropagation",
+            generatedText: "Adaptive explanation.",
+            insertionRange: NSRange(location: 15, length: 0),
+            originalSelectionRange: NSRange(location: 0, length: 15),
+            provenance: AIProposalProvenance(sourceNoteRange: NSRange(location: 0, length: 15)),
+            adaptiveExplanationContext: context
+        )
+
+        XCTAssertEqual(AIProposalPreviewView.scopeLabel(for: proposal), "Selection")
+        XCTAssertTrue(AIProposalPreviewView.usesAdaptiveContext(proposal))
+        XCTAssertTrue(AIProposalPreviewView.usesSources(proposal))
+        XCTAssertTrue(AIProposalPreviewView.usesKnowledgeGaps(proposal))
+        XCTAssertTrue(AIProposalPreviewView.reviewSummary(for: proposal).contains("You decide"))
+        XCTAssertTrue(AIProposalPreviewView.accessibilityMetadataSummary(for: proposal).contains("Knowledge gaps: influenced"))
     }
 
     func testEditingExpandProposalDoesNotModifyDocumentContent() {
@@ -1169,11 +2058,14 @@ final class NotinqTests: XCTestCase {
         let selectedText = "Gradient descent updates weights."
         let noteContext = "Neural network notes mention loss functions."
         let expectations: [AIEditorAction: String] = [
+            .summarize: "study-ready overview",
             .expand: "Expand the selected idea",
             .explain: "why it matters",
             .simplify: "lower the reading difficulty",
+            .rewrite: "clarity and flow",
             .example: "concrete educational example",
             .analogy: "intuitive educational analogy",
+            .ask: "Answer the selected question",
             .dontUnderstand: "STUDENT CONTEXT"
         ]
 
@@ -1199,11 +2091,14 @@ final class NotinqTests: XCTestCase {
     }
 
     func testProposalPreviewLabelsGeneratedContentByAction() {
+        XCTAssertEqual(AIEditorAction.summarize.previewTitle, "SUMMARY")
         XCTAssertEqual(AIEditorAction.expand.previewTitle, "EXPANDED")
         XCTAssertEqual(AIEditorAction.explain.previewTitle, "EXPLAINED")
         XCTAssertEqual(AIEditorAction.simplify.previewTitle, "SIMPLIFIED")
+        XCTAssertEqual(AIEditorAction.rewrite.previewTitle, "REWRITTEN")
         XCTAssertEqual(AIEditorAction.example.previewTitle, "EXAMPLE")
         XCTAssertEqual(AIEditorAction.analogy.previewTitle, "ANALOGY")
+        XCTAssertEqual(AIEditorAction.ask.previewTitle, "ANSWER")
         XCTAssertEqual(AIEditorAction.dontUnderstand.previewTitle, "ADAPTIVE EXPLANATION")
     }
 
@@ -2535,6 +3430,8 @@ final class NotinqTests: XCTestCase {
         XCTAssertEqual(LearningInsightsAnalysisPhase.ready.statusText, "Analysis updated.")
         XCTAssertEqual(LearningInsightsAnalysisPhase.empty.statusText, "No lecture concepts were identified.")
         XCTAssertEqual(LearningInsightsAnalysisPhase.failure("Bad request").statusText, "Bad request")
+        XCTAssertEqual(LearningInsightsAction.insert.title, "Propose Add to Note")
+        XCTAssertEqual(LearningInsightsAction.insert.accessibilityLabel, "Create a proposal before adding generated content to the note")
 
         XCTAssertTrue(LearningInsightsButtonAvailability.canAnalyze(isAnalyzing: false, hasSourceText: true))
         XCTAssertFalse(LearningInsightsButtonAvailability.canAnalyze(isAnalyzing: true, hasSourceText: true))
@@ -2640,7 +3537,7 @@ final class NotinqTests: XCTestCase {
 
         model.insertGeneratedPreview()
         wait(for: [insertionExpectation], timeout: 1.0)
-        XCTAssertEqual(model.statusMessage, "Inserted the generated content into the note.")
+        XCTAssertEqual(model.statusMessage, "Created a proposal to review before adding this to the note.")
     }
 
     func testSearchNavigationHelperClampsToAvailableResults() {
@@ -3195,6 +4092,26 @@ final class AIEvaluationRegressionTests: XCTestCase {
         XCTAssertTrue(session.activeQuestion?.question.contains("Chain Rule") ?? false)
     }
 
+    func testTeachMeUsesMockProviderForQuestionAndEvaluation() {
+        let provider = MockTeachMeProvider(
+            questionText: "Why does the chain rule matter for backpropagation?",
+            evaluation: .partiallyCorrect,
+            feedback: "You named gradients, but missed the nested-function relationship."
+        )
+        let engine = TeachMeEngine(questionGenerator: provider, answerEvaluator: provider)
+        let answering = engine.beginAnswering(
+            engine.startSession(adaptiveContext: AdaptiveExplanationContext(identifiedKnowledgeGaps: ["Chain Rule"]))
+        )
+
+        XCTAssertEqual(answering.activeQuestion?.question, "Why does the chain rule matter for backpropagation?")
+
+        let feedback = engine.submitAnswer("It helps gradients move.", for: answering)
+
+        XCTAssertEqual(feedback.answerHistory.last?.evaluation, .partiallyCorrect)
+        XCTAssertEqual(feedback.answerHistory.last?.feedback, "You named gradients, but missed the nested-function relationship.")
+        XCTAssertEqual(feedback.answerHistory.last?.confidence, 0.73)
+    }
+
     func testTeachMeCorrectPathCompletes() {
         let engine = TeachMeEngine()
         let session = engine.beginAnswering(
@@ -3298,6 +4215,21 @@ final class AIEvaluationRegressionTests: XCTestCase {
         XCTAssertEqual(candidate?.source, .knowledgeGap)
     }
 
+    func testTeachMePrioritizesWeakConceptBeforePlannerRecommendation() {
+        let context = AdaptiveExplanationContext(
+            weakConcepts: ["Partial Derivatives"]
+        )
+
+        let candidate = TeachMeEngine().selectConcept(
+            adaptiveContext: context,
+            recommendedConcepts: ["Matrix Multiplication"],
+            manualConcept: "Manual Topic"
+        )
+
+        XCTAssertEqual(candidate?.conceptName, "Partial Derivatives")
+        XCTAssertEqual(candidate?.source, .weakConcept)
+    }
+
     func testTeachMeUsesMasteryFallbackWhenNoGapsExist() {
         let context = AdaptiveExplanationContext(
             masteryStates: [
@@ -3310,6 +4242,17 @@ final class AIEvaluationRegressionTests: XCTestCase {
 
         XCTAssertEqual(candidate?.conceptName, "derivative")
         XCTAssertEqual(candidate?.source, .weakMastery)
+    }
+
+    func testTeachMeUsesStudyRecommendationBeforeManualFallback() {
+        let candidate = TeachMeEngine().selectConcept(
+            adaptiveContext: AdaptiveExplanationContext(),
+            recommendedConcepts: ["ATP"],
+            manualConcept: "Manual Topic"
+        )
+
+        XCTAssertEqual(candidate?.conceptName, "ATP")
+        XCTAssertEqual(candidate?.source, .studyRecommendation)
     }
 
 }

@@ -28,10 +28,10 @@ struct SelectionToolbarView: View {
     var body: some View {
         HStack(spacing: 10) {
             actionGroup {
-                ActionIcon(name: "summary", label: "Summarize", action: onSummarize)
+                ActionIcon(name: "summary", label: "Summarize", disabled: areProposalActionsDisabled, action: onSummarize)
                 actionPill("Expand", disabled: areProposalActionsDisabled, action: onExpand)
                 actionPill("Simplify", disabled: areProposalActionsDisabled, action: onSimplify)
-                ActionIcon(name: "rewrite", label: "Rewrite", action: onRewrite)
+                ActionIcon(name: "rewrite", label: "Rewrite", disabled: areProposalActionsDisabled, action: onRewrite)
                 ActionIcon(name: "explain", label: "Explain", disabled: areProposalActionsDisabled, action: onExplain)
                 actionPill("Example", disabled: areProposalActionsDisabled, action: onExample)
                 actionPill("Analogy", disabled: areProposalActionsDisabled, action: onAnalogy)
@@ -45,7 +45,7 @@ struct SelectionToolbarView: View {
                 actionPill("Flashcards", action: onFlashcards)
                 actionPill("Quiz", action: onQuiz)
                 actionPill("Copy", action: onCopy)
-                ActionIcon(name: "ask", label: "Ask AI", action: onAdd)
+                ActionIcon(name: "ask", label: "Ask AI", disabled: areProposalActionsDisabled, action: onAdd)
             }
         }
         .padding(.horizontal, 10)

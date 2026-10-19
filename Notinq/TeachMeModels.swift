@@ -130,7 +130,9 @@ struct TeachMeConceptCandidate: Equatable, Sendable {
     enum Source: Equatable, Sendable {
         case knowledgeGap
         case historicallyConfusing
+        case weakConcept
         case weakMastery
+        case studyRecommendation
         case manual
     }
 
@@ -141,144 +143,31 @@ struct TeachMeConceptCandidate: Equatable, Sendable {
     var sourceReferences: [AdaptiveExplanationSource]
 }
 
-struct TeachMeEngine {
-    func startSession(
-        adaptiveContext: AdaptiveExplanationContext,
-        manualConcept: String? = nil,
-        now: Date = Date()
-    ) -> TeachMeSession {
-        guard let candidate = selectConcept(adaptiveContext: adaptiveContext, manualConcept: manualConcept) else {
-            return TeachMeSession(state: .idle)
-        }
+protocol TeachMeQuestionGenerating {
+    func generateQuestion(
+        for candidate: TeachMeConceptCandidate,
+        followUp: Bool,
+        now: Date
+    ) -> TeachMeQuestion
+}
 
-        let question = makeQuestion(for: candidate, followUp: false, now: now)
-        return TeachMeSession(
-            state: .question,
-            activeConceptID: candidate.conceptID,
-            activeConceptName: candidate.conceptName,
-            activeQuestion: question,
-            startedAt: now,
-            updatedAt: now
-        )
-    }
+protocol TeachMeAnswerEvaluating {
+    func evaluateAnswer(
+        _ answer: String,
+        for question: TeachMeQuestion,
+        now: Date
+    ) -> TeachMeResponse
+}
 
-    func beginAnswering(_ session: TeachMeSession, now: Date = Date()) -> TeachMeSession {
-        guard session.state == .question else { return session }
-        var updated = session
-        updated.state = .answering
-        updated.updatedAt = now
-        return updated
-    }
-
-    func submitAnswer(_ answer: String, for session: TeachMeSession, now: Date = Date()) -> TeachMeSession {
-        guard let question = session.activeQuestion else { return session }
-        let evaluation = evaluate(answer: answer, for: question)
-        let feedback = feedback(for: evaluation, answer: answer, question: question)
-        var updated = session
-        updated.state = .feedback
-        updated.answerHistory.append(
-            TeachMeResponse(
-                questionID: question.id,
-                answer: answer,
-                submittedAt: now,
-                evaluation: evaluation,
-                confidence: confidence(for: evaluation, answer: answer),
-                feedback: feedback
-            )
-        )
-        updated.updatedAt = now
-        return updated
-    }
-
-    func advanceAfterFeedback(_ session: TeachMeSession, now: Date = Date()) -> TeachMeSession {
-        guard session.state == .feedback, let last = session.answerHistory.last else { return session }
-
-        if last.evaluation == .correct || session.followUpCount >= 1 {
-            var completed = session
-            completed.state = .complete
-            completed.updatedAt = now
-            return completed
-        }
-
-        guard let conceptID = session.activeConceptID,
-              let conceptName = session.activeConceptName else {
-            var completed = session
-            completed.state = .complete
-            completed.updatedAt = now
-            return completed
-        }
-
-        let candidate = TeachMeConceptCandidate(
-            conceptID: conceptID,
-            conceptName: conceptName,
-            source: .knowledgeGap,
-            originatingKnowledgeGap: session.activeQuestion?.originatingKnowledgeGap,
-            sourceReferences: session.activeQuestion?.sourceReferences ?? []
-        )
-        var followUp = session
-        followUp.followUpCount += 1
-        followUp.activeQuestion = makeQuestion(for: candidate, followUp: true, now: now)
-        followUp.state = .question
-        followUp.updatedAt = now
-        return followUp
-    }
-
-    func selectConcept(
-        adaptiveContext: AdaptiveExplanationContext,
-        manualConcept: String? = nil
-    ) -> TeachMeConceptCandidate? {
-        if let gap = adaptiveContext.identifiedKnowledgeGaps.firstNonEmpty {
-            return candidate(
-                name: gap,
-                source: .knowledgeGap,
-                originatingKnowledgeGap: gap,
-                references: adaptiveContext.retrievedNoteSources
-            )
-        }
-
-        if let concept = adaptiveContext.historicallyConfusingConcepts.firstNonEmpty {
-            return candidate(
-                name: concept,
-                source: .historicallyConfusing,
-                originatingKnowledgeGap: nil,
-                references: adaptiveContext.retrievedNoteSources
-            )
-        }
-
-        let weakMastery = adaptiveContext.masteryStates
-            .filter { $0.value == .struggling || $0.value == .needsPractice }
-            .map(\.key)
-            .sorted()
-            .firstNonEmpty
-        if let weakMastery {
-            return candidate(
-                name: weakMastery,
-                source: .weakMastery,
-                originatingKnowledgeGap: nil,
-                references: adaptiveContext.retrievedNoteSources
-            )
-        }
-
-        if let manualConcept = manualConcept?.trimmingCharacters(in: .whitespacesAndNewlines), !manualConcept.isEmpty {
-            return candidate(
-                name: manualConcept,
-                source: .manual,
-                originatingKnowledgeGap: nil,
-                references: adaptiveContext.retrievedNoteSources
-            )
-        }
-
-        return nil
-    }
-
-    private func makeQuestion(
+struct RuleBasedTeachMeProvider: TeachMeQuestionGenerating, TeachMeAnswerEvaluating {
+    func generateQuestion(
         for candidate: TeachMeConceptCandidate,
         followUp: Bool,
         now: Date
     ) -> TeachMeQuestion {
         let prompt = followUp
-            ? "Follow-up: what is one missing step that connects \(candidate.conceptName) to the idea in your notes?"
-            : "What is the key idea behind \(candidate.conceptName), and why does it matter in these notes?"
+            ? "Follow-up: what missing step connects \(candidate.conceptName) to the idea in your notes?"
+            : "Why does \(candidate.conceptName) matter here, and how does it help explain the idea in your notes?"
 
         return TeachMeQuestion(
             conceptID: candidate.conceptID,
@@ -290,7 +179,23 @@ struct TeachMeEngine {
         )
     }
 
-    private func evaluate(answer: String, for question: TeachMeQuestion) -> TeachMeEvaluation {
+    func evaluateAnswer(
+        _ answer: String,
+        for question: TeachMeQuestion,
+        now: Date
+    ) -> TeachMeResponse {
+        let evaluation = evaluation(for: answer, question: question)
+        return TeachMeResponse(
+            questionID: question.id,
+            answer: answer,
+            submittedAt: now,
+            evaluation: evaluation,
+            confidence: confidence(for: evaluation, answer: answer),
+            feedback: feedback(for: evaluation, question: question)
+        )
+    }
+
+    private func evaluation(for answer: String, question: TeachMeQuestion) -> TeachMeEvaluation {
         let answerTokens = meaningfulTokens(answer)
         guard !answerTokens.isEmpty else { return .incorrect }
 
@@ -307,11 +212,7 @@ struct TeachMeEngine {
         return .incorrect
     }
 
-    private func feedback(
-        for evaluation: TeachMeEvaluation,
-        answer: String,
-        question: TeachMeQuestion
-    ) -> String {
+    private func feedback(for evaluation: TeachMeEvaluation, question: TeachMeQuestion) -> String {
         let sourceHint = question.sourceReferences.first?.noteTitle
         let sourceText = sourceHint.map { " Check \($0) for the source idea." } ?? ""
         switch evaluation {
@@ -338,6 +239,195 @@ struct TeachMeEngine {
         return max(0, min(1, base + lengthBoost))
     }
 
+    private func meaningfulTokens(_ value: String) -> [String] {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 2 }
+    }
+
+    private var explanatoryTokens: Set<String> {
+        [
+            "adjusts", "allows", "because", "changes", "connects", "explains",
+            "helps", "matters", "moves", "produces", "reduces", "relates",
+            "supports", "uses"
+        ]
+    }
+}
+
+struct TeachMeEngine {
+    private let questionGenerator: any TeachMeQuestionGenerating
+    private let answerEvaluator: any TeachMeAnswerEvaluating
+
+    init(
+        questionGenerator: any TeachMeQuestionGenerating = RuleBasedTeachMeProvider(),
+        answerEvaluator: any TeachMeAnswerEvaluating = RuleBasedTeachMeProvider()
+    ) {
+        self.questionGenerator = questionGenerator
+        self.answerEvaluator = answerEvaluator
+    }
+
+    func startSession(
+        adaptiveContext: AdaptiveExplanationContext,
+        recommendedConcepts: [String] = [],
+        manualConcept: String? = nil,
+        now: Date = Date()
+    ) -> TeachMeSession {
+        guard let candidate = selectConcept(
+            adaptiveContext: adaptiveContext,
+            recommendedConcepts: recommendedConcepts,
+            manualConcept: manualConcept
+        ) else {
+            return TeachMeSession(state: .idle)
+        }
+
+        let question = questionGenerator.generateQuestion(for: candidate, followUp: false, now: now)
+        let session = TeachMeSession(
+            state: .question,
+            activeConceptID: candidate.conceptID,
+            activeConceptName: candidate.conceptName,
+            activeQuestion: question,
+            startedAt: now,
+            updatedAt: now
+        )
+        ResearchInstrumentationService.shared.recordTeachMeStarted(session: session)
+        return session
+    }
+
+    func beginAnswering(_ session: TeachMeSession, now: Date = Date()) -> TeachMeSession {
+        guard session.state == .question else { return session }
+        var updated = session
+        updated.state = .answering
+        updated.updatedAt = now
+        return updated
+    }
+
+    func submitAnswer(_ answer: String, for session: TeachMeSession, now: Date = Date()) -> TeachMeSession {
+        guard let question = session.activeQuestion else { return session }
+        let response = answerEvaluator.evaluateAnswer(answer, for: question, now: now)
+        var updated = session
+        updated.state = .feedback
+        updated.answerHistory.append(response)
+        updated.updatedAt = now
+        ResearchInstrumentationService.shared.recordTeachMeQuestionAnswered(
+            question: question,
+            response: response,
+            session: updated
+        )
+        return updated
+    }
+
+    func advanceAfterFeedback(_ session: TeachMeSession, now: Date = Date()) -> TeachMeSession {
+        guard session.state == .feedback, let last = session.answerHistory.last else { return session }
+
+        if last.evaluation == .correct || session.followUpCount >= 1 {
+            var completed = session
+            completed.state = .complete
+            completed.updatedAt = now
+            ResearchInstrumentationService.shared.recordTeachMeCompleted(session: completed)
+            return completed
+        }
+
+        guard let conceptID = session.activeConceptID,
+              let conceptName = session.activeConceptName else {
+            var completed = session
+            completed.state = .complete
+            completed.updatedAt = now
+            ResearchInstrumentationService.shared.recordTeachMeCompleted(session: completed)
+            return completed
+        }
+
+        let candidate = TeachMeConceptCandidate(
+            conceptID: conceptID,
+            conceptName: conceptName,
+            source: .knowledgeGap,
+            originatingKnowledgeGap: session.activeQuestion?.originatingKnowledgeGap,
+            sourceReferences: session.activeQuestion?.sourceReferences ?? []
+        )
+        var followUp = session
+        followUp.followUpCount += 1
+        followUp.activeQuestion = questionGenerator.generateQuestion(for: candidate, followUp: true, now: now)
+        followUp.state = .question
+        followUp.updatedAt = now
+        if let question = followUp.activeQuestion {
+            ResearchInstrumentationService.shared.recordQuestionGenerated(question: question, questionType: "teachMeFollowUp")
+        }
+        return followUp
+    }
+
+    func selectConcept(
+        adaptiveContext: AdaptiveExplanationContext,
+        recommendedConcepts: [String] = [],
+        manualConcept: String? = nil
+    ) -> TeachMeConceptCandidate? {
+        let weakConceptKeys = Set(adaptiveContext.weakConcepts.map(Self.conceptID(for:)))
+        let historicallyConfusingKeys = Set(adaptiveContext.historicallyConfusingConcepts.map(Self.conceptID(for:)))
+        let explicitGap = adaptiveContext.identifiedKnowledgeGaps.first { gap in
+            let key = Self.conceptID(for: gap)
+            return !weakConceptKeys.contains(key) && !historicallyConfusingKeys.contains(key)
+        }
+        if let gap = explicitGap?.trimmingCharacters(in: .whitespacesAndNewlines), !gap.isEmpty {
+            return candidate(
+                name: gap,
+                source: .knowledgeGap,
+                originatingKnowledgeGap: gap,
+                references: adaptiveContext.retrievedNoteSources
+            )
+        }
+
+        if let concept = adaptiveContext.historicallyConfusingConcepts.firstNonEmpty {
+            return candidate(
+                name: concept,
+                source: .historicallyConfusing,
+                originatingKnowledgeGap: nil,
+                references: adaptiveContext.retrievedNoteSources
+            )
+        }
+
+        if let concept = adaptiveContext.weakConcepts.firstNonEmpty {
+            return candidate(
+                name: concept,
+                source: .weakConcept,
+                originatingKnowledgeGap: nil,
+                references: adaptiveContext.retrievedNoteSources
+            )
+        }
+
+        let weakMastery = adaptiveContext.masteryStates
+            .filter { $0.value == .struggling || $0.value == .needsPractice }
+            .map(\.key)
+            .sorted()
+            .firstNonEmpty
+        if let weakMastery {
+            return candidate(
+                name: weakMastery,
+                source: .weakMastery,
+                originatingKnowledgeGap: nil,
+                references: adaptiveContext.retrievedNoteSources
+            )
+        }
+
+        if let recommendedConcept = recommendedConcepts.firstNonEmpty {
+            return candidate(
+                name: recommendedConcept,
+                source: .studyRecommendation,
+                originatingKnowledgeGap: nil,
+                references: adaptiveContext.retrievedNoteSources
+            )
+        }
+
+        if let manualConcept = manualConcept?.trimmingCharacters(in: .whitespacesAndNewlines), !manualConcept.isEmpty {
+            return candidate(
+                name: manualConcept,
+                source: .manual,
+                originatingKnowledgeGap: nil,
+                references: adaptiveContext.retrievedNoteSources
+            )
+        }
+
+        return nil
+    }
+
     private func candidate(
         name: String,
         source: TeachMeConceptCandidate.Source,
@@ -353,27 +443,12 @@ struct TeachMeEngine {
         )
     }
 
-    static func conceptID(for value: String) -> String {
+    nonisolated static func conceptID(for value: String) -> String {
         value
             .lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-    }
-
-    private func meaningfulTokens(_ value: String) -> [String] {
-        value
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count > 2 }
-    }
-
-    private var explanatoryTokens: Set<String> {
-        [
-            "adjusts", "allows", "because", "changes", "connects", "explains",
-            "helps", "matters", "moves", "produces", "reduces", "relates",
-            "supports", "uses"
-        ]
     }
 }
 

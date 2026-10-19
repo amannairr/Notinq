@@ -2,6 +2,8 @@ import SwiftUI
 
 struct KnowledgeGraphExplorerView: View {
     @StateObject private var viewModel = KnowledgeGraphExplorerViewModel()
+    @State private var dragStartViewport: GraphExplorerViewport?
+    @State private var magnificationStartScale: Double?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -74,6 +76,8 @@ struct KnowledgeGraphExplorerView: View {
                 .accessibilityHint("Searches canonical concepts and aliases in the knowledge graph")
             }
 
+            filtersSection
+
             if viewModel.searchResults.isEmpty == false {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Results")
@@ -144,6 +148,20 @@ struct KnowledgeGraphExplorerView: View {
 
             Spacer()
 
+            Toggle("Provenance", isOn: $viewModel.showProvenanceOverlay)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+            Button {
+                viewModel.fitToContent()
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Fit graph to content")
+            .accessibilityLabel("Fit graph to content")
+
             Picker("Neighborhood", selection: Binding(
                 get: { viewModel.radius },
                 set: { viewModel.setRadius($0) }
@@ -157,12 +175,81 @@ struct KnowledgeGraphExplorerView: View {
         }
     }
 
+    private var filtersSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Filters")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.textSecondary)
+
+            TextField("Filter visible graph", text: Binding(
+                get: { viewModel.filterState.textQuery },
+                set: { viewModel.filterState.textQuery = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel("Filter graph by concept title")
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
+                masteryToggle("Mastered", .mastered)
+                masteryToggle("Familiar", .familiar)
+                masteryToggle("Practice", .needsPractice)
+                masteryToggle("Struggling", .struggling)
+            }
+
+            Toggle("Active gaps", isOn: gapBinding(.active))
+                .controlSize(.small)
+            Toggle("Resolved gaps", isOn: gapBinding(.resolved))
+                .controlSize(.small)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Min confidence \(Int(viewModel.filterState.minimumConfidence * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(Color.textSecondary)
+                Slider(value: Binding(
+                    get: { viewModel.filterState.minimumConfidence },
+                    set: { viewModel.filterState.minimumConfidence = $0 }
+                ), in: 0...1, step: 0.05)
+                .accessibilityLabel("Minimum edge confidence")
+            }
+        }
+    }
+
+    private func masteryToggle(_ title: String, _ state: GraphMasteryState) -> some View {
+        Toggle(title, isOn: masteryBinding(state))
+            .controlSize(.small)
+    }
+
+    private func masteryBinding(_ state: GraphMasteryState) -> Binding<Bool> {
+        Binding(
+            get: { viewModel.filterState.masteryStates.contains(state) },
+            set: { isOn in
+                if isOn {
+                    viewModel.filterState.masteryStates.insert(state)
+                } else {
+                    viewModel.filterState.masteryStates.remove(state)
+                }
+            }
+        )
+    }
+
+    private func gapBinding(_ status: GraphGapStatus) -> Binding<Bool> {
+        Binding(
+            get: { viewModel.filterState.gapStatuses.contains(status) },
+            set: { isOn in
+                if isOn {
+                    viewModel.filterState.gapStatuses.insert(status)
+                } else {
+                    viewModel.filterState.gapStatuses.remove(status)
+                }
+            }
+        )
+    }
+
     private var graphCanvas: some View {
         GeometryReader { proxy in
-            let positions = explorerPositions(size: proxy.size)
+            let positions = explorerPositions(size: proxy.size, nodes: viewModel.filteredNodes)
 
             ZStack {
-                if viewModel.nodes.isEmpty {
+                if viewModel.filteredNodes.isEmpty {
                     ContentUnavailableView(
                         "No Graph Data",
                         systemImage: "point.3.connected.trianglepath.dotted",
@@ -171,17 +258,23 @@ struct KnowledgeGraphExplorerView: View {
                     .accessibilityLabel("No knowledge graph data available")
                 } else {
                     Canvas { context, _ in
-                        for edge in viewModel.edges {
+                        for edge in viewModel.filteredEdges {
                             guard let source = positions[edge.sourceID], let target = positions[edge.targetID] else { continue }
                             var path = Path()
                             path.move(to: source)
                             path.addLine(to: target)
-                            context.stroke(path, with: .color(Color.accentColor.opacity(0.25)), lineWidth: 1.4)
+                            context.stroke(path, with: .color(Color.accentColor.opacity(0.18 + edge.confidence * 0.32)), lineWidth: 0.8 + edge.confidence * 2.4)
                         }
                     }
                     .accessibilityHidden(true)
 
-                    ForEach(viewModel.nodes) { node in
+                    ForEach(viewModel.filteredEdges) { edge in
+                        if let source = positions[edge.sourceID], let target = positions[edge.targetID] {
+                            explorerEdgeHitTarget(edge, source: source, target: target)
+                        }
+                    }
+
+                    ForEach(viewModel.filteredNodes) { node in
                         if let point = positions[node.id] {
                             explorerNode(node)
                                 .position(point)
@@ -190,7 +283,62 @@ struct KnowledgeGraphExplorerView: View {
                 }
             }
             .padding(20)
+            .scaleEffect(viewModel.viewport.scale)
+            .offset(x: viewModel.viewport.offsetX, y: viewModel.viewport.offsetY)
+            .gesture(panGesture)
+            .simultaneousGesture(zoomGesture)
         }
+    }
+
+    private var panGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if dragStartViewport == nil {
+                    dragStartViewport = viewModel.viewport
+                }
+                let start = dragStartViewport ?? viewModel.viewport
+                viewModel.updateViewport(
+                    offsetX: start.offsetX + Double(value.translation.width),
+                    offsetY: start.offsetY + Double(value.translation.height)
+                )
+            }
+            .onEnded { _ in
+                dragStartViewport = nil
+            }
+    }
+
+    private var zoomGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                if magnificationStartScale == nil {
+                    magnificationStartScale = viewModel.viewport.scale
+                }
+                let startScale = magnificationStartScale ?? viewModel.viewport.scale
+                viewModel.updateViewport(scale: startScale * value)
+            }
+            .onEnded { _ in
+                magnificationStartScale = nil
+            }
+    }
+
+    private func explorerEdgeHitTarget(_ edge: KnowledgeGraphExplorerEdge, source: CGPoint, target: CGPoint) -> some View {
+        let midpoint = CGPoint(x: (source.x + target.x) / 2, y: (source.y + target.y) / 2)
+        return Button {
+            viewModel.selectEdge(edge.id)
+        } label: {
+            Circle()
+                .fill(viewModel.selectedEdge?.id == edge.id ? Color.accentColor.opacity(0.30) : Color.clear)
+                .frame(width: 26, height: 26)
+                .overlay {
+                    if viewModel.showProvenanceOverlay {
+                        provenanceBadge(sourceCount: edge.provenance.sourceCount, confidence: edge.confidence)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .position(midpoint)
+        .accessibilityLabel("Relationship \(edge.relationshipType), confidence \(Int(edge.confidence * 100)) percent")
+        .accessibilityHint("Selects this relationship and shows provenance details")
     }
 
     private func explorerNode(_ node: KnowledgeGraphExplorerNode) -> some View {
@@ -217,6 +365,12 @@ struct KnowledgeGraphExplorerView: View {
                 Circle()
                     .stroke(isSelected ? Color.accentColor : masteryColor(node.mastery), lineWidth: isSelected ? 3 : 1.5)
             )
+            .overlay(alignment: .topTrailing) {
+                if viewModel.showProvenanceOverlay {
+                    provenanceBadge(sourceCount: node.provenance.sourceCount, confidence: node.provenance.confidence)
+                        .offset(x: 10, y: -8)
+                }
+            }
             .shadow(color: .black.opacity(isSelected ? 0.18 : 0.08), radius: isSelected ? 12 : 5, x: 0, y: 3)
         }
         .buttonStyle(.plain)
@@ -233,6 +387,8 @@ struct KnowledgeGraphExplorerView: View {
                     explanationSection
                     studyNextSection
                     pathSection
+                } else if let edge = viewModel.selectedEdge {
+                    selectedEdgeDetails(edge)
                 } else {
                     ContentUnavailableView("No Concept Selected", systemImage: "point.3.connected.trianglepath.dotted")
                 }
@@ -279,6 +435,18 @@ struct KnowledgeGraphExplorerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+        .dashboardPanel()
+    }
+
+    private func selectedEdgeDetails(_ edge: KnowledgeGraphExplorerEdge) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Relationship")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(Color.textPrimary)
+            metricTile("Confidence", edge.confidence)
+            detailList(title: "Type", items: [edge.relationshipType])
+            provenanceList(edge.provenance)
         }
         .dashboardPanel()
     }
@@ -390,12 +558,44 @@ struct KnowledgeGraphExplorerView: View {
         }
     }
 
-    private func explorerPositions(size: CGSize) -> [String: CGPoint] {
-        guard viewModel.nodes.isEmpty == false else { return [:] }
+    private func provenanceList(_ provenance: GraphProvenanceSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Provenance")
+                .font(.subheadline.weight(.semibold))
+            Text("\(provenance.sourceCount) sources · \(Int(provenance.confidence * 100))% confidence")
+                .font(.caption)
+                .foregroundStyle(Color.textSecondary)
+            ForEach(provenance.references) { reference in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(reference.title)
+                        .font(.caption.weight(.semibold))
+                    Text(reference.excerpt)
+                        .font(.caption2)
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(3)
+                }
+            }
+        }
+    }
+
+    private func provenanceBadge(sourceCount: Int, confidence: Double) -> some View {
+        Text("\(sourceCount) · \(Int(confidence * 100))")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .background(Color.accentColor)
+            .clipShape(Capsule())
+            .help("\(sourceCount) sources, \(Int(confidence * 100)) percent confidence")
+            .accessibilityLabel("\(sourceCount) sources, \(Int(confidence * 100)) percent confidence")
+    }
+
+    private func explorerPositions(size: CGSize, nodes: [KnowledgeGraphExplorerNode]) -> [String: CGPoint] {
+        guard nodes.isEmpty == false else { return [:] }
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let radius = max(90, min(size.width, size.height) * 0.34)
-        return Dictionary(viewModel.nodes.enumerated().map { index, node in
-            let angle = (Double(index) / Double(max(viewModel.nodes.count, 1))) * Double.pi * 2
+        return Dictionary(nodes.enumerated().map { index, node in
+            let angle = (Double(index) / Double(max(nodes.count, 1))) * Double.pi * 2
             return (
                 node.id,
                 CGPoint(

@@ -12,12 +12,12 @@ struct EditorView: View {
     @State private var bridge = TextViewBridge()
     @State private var selectedText = ""
     @State private var selectedRange = NSRange(location: 0, length: 0)
-    @State private var activeSelectionAction: AIAction?
     @State private var activeEditorAction: AIEditorAction?
     @State private var activeProposalRequestID: UUID?
     @State private var activeProposalTask: Task<Void, Never>?
     @State private var pendingProposal: AIProposal?
     @State private var acceptedAdaptiveProposal: AIProposal?
+    @State private var activeAIBlockSourceInfo: AIBlockSourceInfo?
     @State private var editedProposalText = ""
     @ObservedObject private var knowledgeGraphManager = KnowledgeGraphManager.shared
 
@@ -90,7 +90,17 @@ struct EditorView: View {
                         documentText: noteContentBinding.wrappedValue,
                         onDebouncedTextChange: { newText in
                             Task { @MainActor in
+                                let previousCount = appState.noteContent(for: selectedNoteID).count
                                 appState.updateNoteContent(newText, for: selectedNoteID)
+                                let manualDelta = max(0, newText.count - previousCount)
+                                if manualDelta > 0 {
+                                    ResearchInstrumentationService.shared.recordWritingMetrics(
+                                        manualCharactersWritten: manualDelta,
+                                        aiCharactersAccepted: 0,
+                                        aiCharactersEdited: 0,
+                                        noteID: selectedNoteID
+                                    )
+                                }
                             }
                         }, 
                         onSelectionChange: { text, range in
@@ -106,10 +116,10 @@ struct EditorView: View {
                             }
                         },
                         areProposalActionsDisabled: pendingProposal != nil,
-                        onSummarize: { performSelectionAction(.summarize) },
+                        onSummarize: { performEditorAction(.summarize) },
                         onExpand: { performEditorAction(.expand) },
                         onSimplify: { performEditorAction(.simplify) },
-                        onRewrite: { performSelectionAction(.rewrite) },
+                        onRewrite: { performEditorAction(.rewrite) },
                         onExplain: { performEditorAction(.explain) },
                         onExample: { performEditorAction(.example) },
                         onAnalogy: { performEditorAction(.analogy) },
@@ -124,11 +134,14 @@ struct EditorView: View {
                                 appState.selectedMode = .study
                             }
                         },
-                        onAdd: { performSelectionAction(.ask) },
+                        onAdd: { performEditorAction(.ask) },
                         onCopy: { copySelectedText() },
                         onStyleChange: { styleState = $0 },
-                onAIBlockFollowUp: { followUp, block in
+                        onAIBlockFollowUp: { followUp, block in
                             performAIBlockFollowUp(followUp, block: block)
+                        },
+                        onAIBlockSourceInfo: { block in
+                            activeAIBlockSourceInfo = block.sourceInfo
                         }
                     )
                     .padding(.top, 6)
@@ -152,26 +165,6 @@ struct EditorView: View {
                         )
                         .padding(18)
                         .frame(maxWidth: 520)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    }
-
-                    if let activeSelectionAction {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text(selectionActionTitle(for: activeSelectionAction))
-                                .font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(Color.textPrimary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(
-                            Capsule()
-                                .stroke(Color.borderSubtle, lineWidth: 0.5)
-                        )
-                        .padding(14)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     }
 
@@ -207,6 +200,18 @@ struct EditorView: View {
                         .padding(18)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     }
+
+                    if let activeAIBlockSourceInfo {
+                        AIBlockSourceInspectorView(
+                            sourceInfo: activeAIBlockSourceInfo,
+                            onClose: {
+                                self.activeAIBlockSourceInfo = nil
+                            }
+                        )
+                        .padding(18)
+                        .frame(maxWidth: 360)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("No note selected")
@@ -229,25 +234,20 @@ struct EditorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.bgEditor)
-        .onChange(of: selectedNoteID) { _ in
-            clearProposalState(invalidateRequest: true)
+        .onAppear {
+            consumePendingKnowledgeGapExplanationRequestIfNeeded()
+            consumePendingStudyProposalRequestIfNeeded()
         }
-    }
-
-    private func performSelectionAction(_ action: AIAction) {
-        guard let selection = bridge.selectedTextAndRange() ?? selectedSelection() else { return }
-        guard !selection.text.isEmpty else { return }
-        guard let noteID = selectedNoteID else { return }
-        guard activeSelectionAction == nil else { return }
-
-        let noteContext = appState.noteContent(for: noteID)
-        activeSelectionAction = action
-
-        AIService.shared.directEdit(action: action, selectedText: selection.text, noteContext: noteContext, noteID: noteID) { response in
-            DispatchQueue.main.async {
-                bridge.insertAIResult(action: action, response: response, selectionRange: selection.range)
-                activeSelectionAction = nil
-            }
+        .onChange(of: selectedNoteID) { _, _ in
+            clearProposalState(invalidateRequest: true)
+            consumePendingKnowledgeGapExplanationRequestIfNeeded()
+            consumePendingStudyProposalRequestIfNeeded()
+        }
+        .onChange(of: appState.pendingKnowledgeGapExplanationRequest?.id) { _, _ in
+            consumePendingKnowledgeGapExplanationRequestIfNeeded()
+        }
+        .onChange(of: appState.pendingStudyProposalRequest?.id) { _, _ in
+            consumePendingStudyProposalRequestIfNeeded()
         }
     }
 
@@ -255,12 +255,22 @@ struct EditorView: View {
         guard let selection = bridge.selectedTextAndRange() ?? selectedSelection() else { return }
         guard !selection.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard let noteID = selectedNoteID else { return }
-        guard activeSelectionAction == nil, pendingProposal == nil else { return }
+        beginProposalGeneration(action: action, selection: selection, noteID: noteID)
+    }
+
+    private func beginProposalGeneration(
+        action: AIEditorAction,
+        selection: (text: String, range: NSRange),
+        noteID: UUID
+    ) {
+        guard activeEditorAction == nil, pendingProposal == nil else { return }
+        guard !selection.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let noteContext = bridge.textView?.string ?? appState.noteContent(for: noteID)
         let sourceRange = selection.range
         let requestID = UUID()
         let documentSnapshot = DocumentSnapshot(noteID: noteID, content: noteContext)
+        let generationStartedAt = Date()
         activeProposalTask?.cancel()
         activeProposalRequestID = requestID
         activeEditorAction = action
@@ -298,6 +308,10 @@ struct EditorView: View {
                 }
 
                 pendingProposal = proposal
+                ResearchInstrumentationService.shared.recordProposalGenerated(
+                    proposal: proposal,
+                    latency: Date().timeIntervalSince(generationStartedAt)
+                )
                 editedProposalText = proposal.generatedText
                 bridge.restoreSelection(for: proposal)
                 activeEditorAction = nil
@@ -361,6 +375,7 @@ struct EditorView: View {
         }
         activeEditorAction = nil
         acceptedAdaptiveProposal = nil
+        activeAIBlockSourceInfo = nil
         pendingProposal = nil
         editedProposalText = ""
     }
@@ -372,25 +387,80 @@ struct EditorView: View {
     }
 
     private func performAIBlockFollowUp(_ followUp: AIBlockFollowUp, block: AIBlockSelection) {
-        guard let textView = bridge.textView else { return }
-        let noteContext = textView.string
-        bridge.beginAIStreaming(title: followUp.title, selectionRange: block.contentRange)
-        AIService.shared.streamFollowUp(
-            noteContext: noteContext,
-            followUpTitle: followUp.title,
-            blockContent: block.content,
-            onToken: { token in
-                bridge.appendAIStreamingToken(token)
-            },
-            completion: {
-                bridge.finishAIStreaming()
-            }
+        guard let noteID = selectedNoteID else { return }
+        let action: AIEditorAction
+        switch followUp {
+        case .regenerate:
+            action = .rewrite
+        case .shorter:
+            action = .simplify
+        case .moreDetailed:
+            action = .expand
+        case .continueWriting:
+            action = .ask
+        }
+
+        beginProposalGeneration(
+            action: action,
+            selection: (text: block.content, range: block.contentRange),
+            noteID: noteID
         )
     }
 
     private func selectedSelection() -> (text: String, range: NSRange)? {
         guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return (selectedText, selectedRange)
+    }
+
+    private func consumePendingKnowledgeGapExplanationRequestIfNeeded() {
+        guard activeEditorAction == nil, pendingProposal == nil else { return }
+        guard let request = appState.pendingKnowledgeGapExplanationRequest else { return }
+        guard selectedNoteID == request.noteID else { return }
+
+        let currentText = bridge.textView?.string ?? appState.noteContent(for: request.noteID)
+        let insertionRange = bridge.textView?.selectedRange() ?? NSRange(location: (currentText as NSString).length, length: 0)
+        appState.consumeKnowledgeGapExplanationRequest(request.id)
+        beginProposalGeneration(
+            action: .explain,
+            selection: (text: request.promptText, range: insertionRange),
+            noteID: request.noteID
+        )
+    }
+
+    private func consumePendingStudyProposalRequestIfNeeded() {
+        guard activeEditorAction == nil, pendingProposal == nil else { return }
+        guard let request = appState.pendingStudyProposalRequest else { return }
+        guard selectedNoteID == request.noteID else { return }
+
+        let currentText = bridge.textView?.string ?? appState.noteContent(for: request.noteID)
+        let selectedRange = bridge.textView?.selectedRange() ?? NSRange(location: (currentText as NSString).length, length: 0)
+        let insertionRange = NSRange(location: min(selectedRange.location + selectedRange.length, (currentText as NSString).length), length: 0)
+        let requestID = UUID()
+        let documentSnapshot = DocumentSnapshot(noteID: request.noteID, content: currentText)
+        let proposal = AIProposal(
+            action: .ask,
+            originalText: request.sourceExcerpt,
+            generatedText: request.content,
+            insertionRange: insertionRange,
+            originalSelectionRange: selectedRange,
+            originatingNoteID: request.noteID,
+            originatingRequestID: requestID,
+            documentSnapshot: documentSnapshot,
+            provenance: AIProposalProvenance(
+                sourceNoteRange: selectedRange,
+                studyFeature: request.feature,
+                sourceConcept: request.sourceConcept,
+                sourceItemID: request.sourceItemID,
+                sourceItemTitle: request.sourceItemTitle
+            )
+        )
+
+        activeProposalRequestID = requestID
+        pendingProposal = proposal
+        editedProposalText = proposal.generatedText
+        bridge.restoreSelection(for: proposal)
+        ResearchInstrumentationService.shared.recordProposalGenerated(proposal: proposal, latency: nil)
+        appState.consumeStudyProposalRequest(request.id)
     }
 
     private func triggerKnowledgeGraphUpdate() {
@@ -409,23 +479,6 @@ struct EditorView: View {
 
     }
 
-    private func selectionActionTitle(for action: AIAction) -> String {
-        switch action {
-        case .summarize:
-            return "Summarizing"
-        case .simplify:
-            return "Simplifying"
-        case .rewrite:
-            return "Rewriting"
-        case .explain:
-            return "Explaining"
-        case .add:
-            return "Adding"
-        case .ask:
-            return "Thinking"
-        }
-    }
-
     private func editorActionTitle(for action: AIEditorAction) -> String {
         action.progressTitle
     }
@@ -435,6 +488,78 @@ struct EditorView: View {
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+struct AIBlockSourceInspectorView: View {
+    let sourceInfo: AIBlockSourceInfo
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("AI Provenance")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.textPrimary)
+
+                Spacer()
+
+                Button("Close", action: onClose)
+                    .buttonStyle(.borderless)
+                    .font(.caption.weight(.semibold))
+            }
+
+            sourceRow(title: "Generated by", value: "AI")
+            sourceRow(title: "Action", value: sourceInfo.displayActionTitle)
+            sourceRow(title: "Generated", value: Self.generatedDateString(sourceInfo.createdAt))
+            sourceRow(title: "Document Status", value: "Accepted into this note")
+            if let studyFeature = sourceInfo.sourceReference.studyFeature, !studyFeature.isEmpty {
+                sourceRow(title: "Study Feature", value: studyFeature)
+            }
+            if let sourceConcept = sourceInfo.sourceReference.sourceConcept, !sourceConcept.isEmpty {
+                sourceRow(title: "Source Concept", value: sourceConcept)
+            }
+            if let sourceItemTitle = sourceInfo.sourceReference.sourceItemTitle, !sourceItemTitle.isEmpty {
+                sourceRow(title: "Source Item", value: sourceItemTitle)
+            }
+            sourceRow(title: "Source", value: "Selected paragraph")
+            sourceRow(title: "Excerpt", value: excerptDisplayText)
+            sourceRow(title: "Location", value: sourceInfo.sourceReference.locationLabel)
+            sourceRow(title: "Agency", value: "This block came from a proposal that was reviewed before insertion.")
+        }
+        .padding(14)
+        .background(.ultraThinMaterial)
+        .background(Color.bgEditor.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.borderSubtle.opacity(0.8), lineWidth: 0.7)
+        )
+    }
+
+    private var excerptDisplayText: String {
+        let excerpt = sourceInfo.sourceReference.sourceTextExcerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return excerpt.isEmpty ? "Source excerpt unavailable" : excerpt
+    }
+
+    private func sourceRow(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(Color.textSecondary)
+            Text(value)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(title == "Excerpt" ? 4 : 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    static func generatedDateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }
 
@@ -450,12 +575,30 @@ struct AIProposalPreviewView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("\(proposal.action.displayTitle) Proposal")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(Color.textPrimary)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.24, green: 0.49, blue: 0.59))
+                    .frame(width: 24, height: 24)
+                    .background(Color(red: 0.24, green: 0.49, blue: 0.59).opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(proposal.action.displayTitle) Proposal")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.textPrimary)
+
+                    Text(Self.reviewSummary(for: proposal))
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            metadataGrid
 
             if proposal.state == .stale {
-                Text("Proposal generated from an older version of this note.")
+                Text("Proposal generated from an older version of this note. Reject it and generate a fresh proposal before inserting.")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -499,6 +642,9 @@ struct AIProposalPreviewView: View {
             HStack {
                 Button("Reject", action: onReject)
                     .buttonStyle(.borderless)
+                    .help("Reject this proposal and leave the note unchanged.")
+                    .accessibilityHint("Leaves the note unchanged.")
+                    .accessibilityIdentifier("proposal-reject-button")
 
                 Spacer()
 
@@ -506,9 +652,15 @@ struct AIProposalPreviewView: View {
                     expandedEditorFocused = true
                 }
                 .buttonStyle(.borderless)
+                .help("Edit the proposal text before accepting.")
+                .accessibilityHint("Moves focus to the proposal text so you can revise it before accepting.")
+                .accessibilityIdentifier("proposal-edit-button")
 
                 Button("Accept", action: onAccept)
                     .keyboardShortcut(.return, modifiers: .command)
+                    .help("Insert this reviewed proposal into the note.")
+                    .accessibilityHint("Adds the reviewed proposal to the note.")
+                    .accessibilityIdentifier("proposal-accept-button")
             }
             .font(.system(size: 12, weight: .semibold))
         }
@@ -520,6 +672,76 @@ struct AIProposalPreviewView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.borderSubtle.opacity(0.8), lineWidth: 0.7)
         )
+        .accessibilityIdentifier("ai-proposal-preview")
+    }
+
+    private var metadataGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 6)], alignment: .leading, spacing: 6) {
+            metadataChip(title: "Change", value: Self.scopeLabel(for: proposal))
+            metadataChip(title: "Action", value: proposal.action.displayTitle)
+            metadataChip(title: "Adaptive", value: Self.usesAdaptiveContext(proposal) ? "Used" : "Not used")
+            metadataChip(title: "Sources", value: Self.usesSources(proposal) ? "Attached" : "None")
+            metadataChip(title: "Gaps", value: Self.usesKnowledgeGaps(proposal) ? "Influenced" : "None")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Self.accessibilityMetadataSummary(for: proposal))
+    }
+
+    private func metadataChip(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(Color.textTertiary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.hoverWarm.opacity(0.36))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    static func reviewSummary(for proposal: AIProposal) -> String {
+        let scope = scopeLabel(for: proposal).lowercased()
+        if proposal.status == .edited {
+            return "AI proposes an edited \(scope) change. The document has not been modified yet."
+        }
+        return "AI proposes a \(scope) change. You decide whether it enters the note."
+    }
+
+    static func scopeLabel(for proposal: AIProposal) -> String {
+        proposal.originalSelectionRange.length > 0 ? "Selection" : "Whole note"
+    }
+
+    static func usesAdaptiveContext(_ proposal: AIProposal) -> Bool {
+        proposal.adaptiveExplanationContext?.hasEvidence == true
+    }
+
+    static func usesSources(_ proposal: AIProposal) -> Bool {
+        if proposal.provenance.sourceNoteRange != nil { return true }
+        if proposal.provenance.transcriptReference?.isEmpty == false { return true }
+        if proposal.provenance.slideReference?.isEmpty == false { return true }
+        if proposal.provenance.sourceItemTitle?.isEmpty == false { return true }
+        return proposal.adaptiveExplanationContext?.retrievedNoteSources.isEmpty == false
+    }
+
+    static func usesKnowledgeGaps(_ proposal: AIProposal) -> Bool {
+        proposal.adaptiveExplanationContext?.identifiedKnowledgeGaps.isEmpty == false
+            || proposal.provenance.studyFeature?.localizedCaseInsensitiveContains("gap") == true
+            || proposal.provenance.sourceConcept?.isEmpty == false
+    }
+
+    static func accessibilityMetadataSummary(for proposal: AIProposal) -> String {
+        [
+            "Change: \(scopeLabel(for: proposal))",
+            "Action: \(proposal.action.displayTitle)",
+            "Adaptive context: \(usesAdaptiveContext(proposal) ? "used" : "not used")",
+            "Sources: \(usesSources(proposal) ? "attached" : "none")",
+            "Knowledge gaps: \(usesKnowledgeGaps(proposal) ? "influenced" : "none")"
+        ].joined(separator: ", ")
     }
 
     static func adaptedUsingLines(from context: AdaptiveExplanationContext) -> [String] {

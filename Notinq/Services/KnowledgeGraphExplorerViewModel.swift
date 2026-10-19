@@ -1,6 +1,55 @@
 import Foundation
 import Combine
 
+enum GraphMasteryState: String, CaseIterable, Identifiable, Codable, Sendable {
+    case mastered
+    case familiar
+    case needsPractice
+    case struggling
+
+    var id: String { rawValue }
+
+    static func state(for mastery: Double) -> GraphMasteryState {
+        if mastery >= 0.8 { return .mastered }
+        if mastery >= 0.55 { return .familiar }
+        if mastery >= 0.35 { return .needsPractice }
+        return .struggling
+    }
+}
+
+enum GraphGapStatus: String, CaseIterable, Identifiable, Codable, Sendable {
+    case active
+    case ignored
+    case resolved
+
+    var id: String { rawValue }
+}
+
+struct GraphExplorerViewport: Codable, Equatable, Sendable {
+    var offsetX: Double = 0
+    var offsetY: Double = 0
+    var scale: Double = 1
+}
+
+struct GraphExplorerFilterState: Codable, Equatable, Sendable {
+    var masteryStates: Set<GraphMasteryState> = Set(GraphMasteryState.allCases)
+    var gapStatuses: Set<GraphGapStatus> = Set(GraphGapStatus.allCases)
+    var minimumConfidence: Double = 0
+    var textQuery: String = ""
+}
+
+struct GraphProvenanceReference: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let excerpt: String
+}
+
+struct GraphProvenanceSummary: Equatable, Sendable {
+    let sourceCount: Int
+    let confidence: Double
+    let references: [GraphProvenanceReference]
+}
+
 struct KnowledgeGraphExplorerNode: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
@@ -13,9 +62,12 @@ struct KnowledgeGraphExplorerNode: Identifiable, Equatable, Sendable {
     let retentionRisk: String
     let relationshipCount: Int
     let blockedTopics: [String]
+    let provenance: GraphProvenanceSummary
 
     var isWeak: Bool { mastery < 0.5 }
     var isStrong: Bool { mastery >= 0.8 }
+    var masteryState: GraphMasteryState { GraphMasteryState.state(for: mastery) }
+    var gapStatus: GraphGapStatus { isWeak || blockedTopics.isEmpty == false ? .active : .resolved }
 }
 
 struct KnowledgeGraphExplorerEdge: Identifiable, Equatable, Sendable {
@@ -24,6 +76,7 @@ struct KnowledgeGraphExplorerEdge: Identifiable, Equatable, Sendable {
     let targetID: String
     let relationshipType: String
     let confidence: Double
+    let provenance: GraphProvenanceSummary
 }
 
 struct KnowledgeGraphExplorerPath: Equatable, Sendable {
@@ -38,6 +91,14 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
     @Published private(set) var nodes: [KnowledgeGraphExplorerNode] = []
     @Published private(set) var edges: [KnowledgeGraphExplorerEdge] = []
     @Published private(set) var selectedNode: KnowledgeGraphExplorerNode?
+    @Published private(set) var selectedEdge: KnowledgeGraphExplorerEdge?
+    @Published var showProvenanceOverlay = false
+    @Published var filterState: GraphExplorerFilterState {
+        didSet { persistExplorerState() }
+    }
+    @Published var viewport: GraphExplorerViewport {
+        didSet { persistExplorerState() }
+    }
     @Published private(set) var explanation = ConceptExplanation(
         conceptName: "",
         aliases: [],
@@ -61,10 +122,22 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
     private let studyPlannerService: StudyPlannerService
     private let studentConceptService: StudentConceptService
     private let retentionEngine: RetentionEngine
+    private let userDefaults: UserDefaults
     private let maxSearchResults = 12
     private let maxGraphRadius = 3
     private let maxGraphNodes = 48
     private let maxGraphEdges = 96
+    private static let filterStateKey = "KnowledgeGraphExplorer.filterState"
+    private static let viewportKey = "KnowledgeGraphExplorer.viewport"
+
+    var filteredNodes: [KnowledgeGraphExplorerNode] {
+        GraphExplorerFiltering.filteredNodes(nodes, filter: filterState)
+    }
+
+    var filteredEdges: [KnowledgeGraphExplorerEdge] {
+        let visibleNodeIDs = Set(filteredNodes.map(\.id))
+        return GraphExplorerFiltering.filteredEdges(edges, visibleNodeIDs: visibleNodeIDs, filter: filterState)
+    }
 
     init(
         repository: KnowledgeRepository = .shared,
@@ -73,7 +146,8 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
         recommendationEngine: LearningRecommendationEngine? = nil,
         studyPlannerService: StudyPlannerService? = nil,
         studentConceptService: StudentConceptService = .shared,
-        retentionEngine: RetentionEngine? = nil
+        retentionEngine: RetentionEngine? = nil,
+        userDefaults: UserDefaults = .standard
     ) {
         self.repository = repository
         self.visualizationService = visualizationService ?? GraphVisualizationService(repository: repository)
@@ -89,6 +163,9 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
         )
         self.studentConceptService = studentConceptService
         self.retentionEngine = retentionEngine ?? RetentionEngine(studentConceptService: studentConceptService)
+        self.userDefaults = userDefaults
+        self.filterState = Self.decode(GraphExplorerFilterState.self, from: userDefaults.data(forKey: Self.filterStateKey)) ?? GraphExplorerFilterState()
+        self.viewport = Self.decode(GraphExplorerViewport.self, from: userDefaults.data(forKey: Self.viewportKey)) ?? GraphExplorerViewport()
     }
 
     func loadInitialGraph() {
@@ -136,10 +213,29 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
     func selectConcept(_ identifier: String) {
         guard let concept = resolveConcept(identifier) else { return }
         selectedNode = node(for: concept, edgeCounts: currentEdgeCounts())
+        selectedEdge = nil
         explanation = explanationService.explainConcept(concept.canonicalName)
         studyRecommendations = recommendationEngine.recommendedPrerequisites(for: concept.canonicalName, limit: 6)
         studyNextTasks = studyPlannerService.studyNext(for: concept.canonicalName, limit: 5)
         loadNeighborhood(around: concept.id)
+    }
+
+    func selectEdge(_ edgeID: String) {
+        guard let edge = edges.first(where: { $0.id == edgeID }) else { return }
+        selectedEdge = edge
+        selectedNode = nil
+    }
+
+    func updateViewport(scale: Double? = nil, offsetX: Double? = nil, offsetY: Double? = nil) {
+        viewport = GraphExplorerViewport(
+            offsetX: offsetX ?? viewport.offsetX,
+            offsetY: offsetY ?? viewport.offsetY,
+            scale: max(0.35, min(3.0, scale ?? viewport.scale))
+        )
+    }
+
+    func fitToContent() {
+        viewport = GraphExplorerViewport()
     }
 
     func setRadius(_ newRadius: Int) {
@@ -190,7 +286,8 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
                 sourceID: $0.sourceID,
                 targetID: $0.targetID,
                 relationshipType: $0.relationshipType,
-                confidence: $0.confidence
+                confidence: $0.confidence,
+                provenance: provenanceSummary(for: $0)
             )
         }
 
@@ -223,8 +320,32 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
             retention: retention,
             retentionRisk: retentionRisk(for: retention),
             relationshipCount: relationshipCount,
-            blockedTopics: blockedTopics
+            blockedTopics: blockedTopics,
+            provenance: provenanceSummary(for: concept)
         )
+    }
+
+    private func provenanceSummary(for concept: CanonicalConceptRecord) -> GraphProvenanceSummary {
+        let references = concept.sourceReferences.prefix(4).compactMap { sourceID -> GraphProvenanceReference? in
+            guard let noteID = UUID(uuidString: sourceID) else { return nil }
+            let title = (try? repository.noteTitle(for: noteID)) ?? "Source"
+            let excerpt = (try? repository.chunks(for: noteID).first?.content).map(Self.truncatedExcerpt) ?? ""
+            return GraphProvenanceReference(id: sourceID, title: title, excerpt: excerpt)
+        }
+        return GraphProvenanceSummary(sourceCount: concept.sourceReferences.count, confidence: concept.confidence, references: references)
+    }
+
+    private func provenanceSummary(for edge: GraphVisualizationEdge) -> GraphProvenanceSummary {
+        let relationship = (try? repository.relationships(containing: edge.sourceID, limit: 256))?
+            .first { $0.id == edge.id }
+        let provenanceIDs = relationship?.provenance ?? []
+        let references = provenanceIDs.prefix(4).compactMap { sourceID -> GraphProvenanceReference? in
+            guard let noteID = UUID(uuidString: sourceID) else { return nil }
+            let title = (try? repository.noteTitle(for: noteID)) ?? "Source"
+            let excerpt = (try? repository.chunks(for: noteID).first?.content).map(Self.truncatedExcerpt) ?? ""
+            return GraphProvenanceReference(id: sourceID, title: title, excerpt: excerpt)
+        }
+        return GraphProvenanceSummary(sourceCount: provenanceIDs.count, confidence: edge.confidence, references: references)
     }
 
     private func masteryRecord(for concept: CanonicalConceptRecord) -> StudentConceptRecord? {
@@ -288,5 +409,53 @@ final class KnowledgeGraphExplorerViewModel: ObservableObject {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { $0.isEmpty == false }
             .joined(separator: " ")
+    }
+
+    private func persistExplorerState() {
+        userDefaults.set(Self.encode(filterState), forKey: Self.filterStateKey)
+        userDefaults.set(Self.encode(viewport), forKey: Self.viewportKey)
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> Data? {
+        try? JSONEncoder().encode(value)
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, from data: Data?) -> T? {
+        guard let data else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private static func truncatedExcerpt(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 140 else { return trimmed }
+        return String(trimmed.prefix(137)) + "..."
+    }
+}
+
+enum GraphExplorerFiltering {
+    static func filteredNodes(
+        _ nodes: [KnowledgeGraphExplorerNode],
+        filter: GraphExplorerFilterState
+    ) -> [KnowledgeGraphExplorerNode] {
+        let query = filter.textQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return nodes.filter { node in
+            guard filter.masteryStates.contains(node.masteryState) else { return false }
+            guard filter.gapStatuses.contains(node.gapStatus) else { return false }
+            guard query.isEmpty == false else { return true }
+            return node.name.localizedCaseInsensitiveContains(query)
+                || node.aliases.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    static func filteredEdges(
+        _ edges: [KnowledgeGraphExplorerEdge],
+        visibleNodeIDs: Set<String>,
+        filter: GraphExplorerFilterState
+    ) -> [KnowledgeGraphExplorerEdge] {
+        edges.filter { edge in
+            visibleNodeIDs.contains(edge.sourceID)
+                && visibleNodeIDs.contains(edge.targetID)
+                && edge.confidence >= filter.minimumConfidence
+        }
     }
 }

@@ -1,9 +1,13 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsOverlayView: View {
     @EnvironmentObject private var appState: AppState
     @State private var authErrorMessage: String?
     @State private var modelPathSummary: String = AIModelManager.shared.currentModelPathDescription()
+    @State private var researchStatistics: ResearchEventStatistics = .empty
+    @State private var researchExportStatus: String?
     #if DEBUG
     @State private var isShowingAIEvaluation = false
     @State private var isShowingLocalAIPlayground = false
@@ -22,6 +26,7 @@ struct SettingsOverlayView: View {
                     header
                     aiSettingsSection
                     privacySection
+                    researchSection
                     voiceSection
                     accountSection
                     debugSection
@@ -36,6 +41,7 @@ struct SettingsOverlayView: View {
             }
             .onAppear {
                 modelPathSummary = AIModelManager.shared.currentModelPathDescription()
+                refreshResearchStatistics()
             }
             .onReceive(NotificationCenter.default.publisher(for: .notinqLocalModelDidChange)) { _ in
                 modelPathSummary = AIModelManager.shared.currentModelPathDescription()
@@ -125,6 +131,54 @@ struct SettingsOverlayView: View {
         }
     }
 
+    private var researchSection: some View {
+        section("Research") {
+            Toggle("Research Instrumentation", isOn: $appState.researchInstrumentationEnabled)
+                .onChange(of: appState.researchInstrumentationEnabled) { _, _ in
+                    appState.persistPreferences()
+                    refreshResearchStatistics()
+                }
+
+            Text("Stores local, aggregate workflow events only. Note text, transcripts, audio, and personal identifiers are not collected.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 6) {
+                researchStatisticRow("Total events", researchStatistics.totalEvents)
+                researchStatisticRow("AI proposals generated", researchStatistics.proposalsGenerated)
+                researchStatisticRow("Accepted", researchStatistics.proposalsAccepted)
+                researchStatisticRow("Rejected", researchStatistics.proposalsRejected)
+                researchStatisticRow("Edited", researchStatistics.proposalsEdited)
+                researchStatisticRow("Knowledge gaps detected", researchStatistics.knowledgeGapsDetected)
+                researchStatisticRow("Resolved", researchStatistics.knowledgeGapsResolved)
+                researchStatisticRow("Questions answered", researchStatistics.questionsAnswered)
+                researchStatisticRow("Teach Me sessions completed", researchStatistics.teachMeSessionsCompleted)
+            }
+            .padding(10)
+            .background(Color.black.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            HStack(spacing: 8) {
+                Button("Export JSON") {
+                    exportResearchDataset(format: .json)
+                }
+                .buttonStyle(.bordered)
+
+                Button("Export CSV") {
+                    exportResearchDataset(format: .csv)
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+            }
+
+            if let researchExportStatus {
+                Text(researchExportStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var voiceSection: some View {
         section("Voice") {
             Toggle("Auto-insert transcription", isOn: $appState.autoInsertTranscription)
@@ -206,6 +260,86 @@ struct SettingsOverlayView: View {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
             content()
+        }
+    }
+
+    private func researchStatisticRow(_ label: String, _ value: Int) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value.formatted())
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+        }
+    }
+
+    private func refreshResearchStatistics() {
+        researchStatistics = ResearchInstrumentationService.shared.statistics()
+    }
+
+    private func exportResearchDataset(format: ResearchDatasetExportFormat) {
+        refreshResearchStatistics()
+
+        let savePanel = NSSavePanel()
+        savePanel.title = "Export Research Dataset"
+        savePanel.nameFieldStringValue = format.defaultFileName
+        savePanel.allowedContentTypes = [format.contentType]
+        savePanel.canCreateDirectories = true
+
+        savePanel.begin { response in
+            guard response == .OK, let url = savePanel.url else { return }
+
+            do {
+                let data = try format.exportData(from: ResearchInstrumentationService.shared)
+                try data.write(to: url, options: .atomic)
+                DispatchQueue.main.async {
+                    researchExportStatus = "Exported \(format.displayName) research dataset."
+                    refreshResearchStatistics()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    researchExportStatus = "Export failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+private enum ResearchDatasetExportFormat {
+    case json
+    case csv
+
+    var displayName: String {
+        switch self {
+        case .json: return "JSON"
+        case .csv: return "CSV"
+        }
+    }
+
+    var defaultFileName: String {
+        switch self {
+        case .json: return "notinq-research-events.json"
+        case .csv: return "notinq-research-events.csv"
+        }
+    }
+
+    var contentType: UTType {
+        switch self {
+        case .json:
+            return .json
+        case .csv:
+            return UTType(filenameExtension: "csv") ?? .plainText
+        }
+    }
+
+    func exportData(from service: ResearchInstrumentationService) throws -> Data {
+        switch self {
+        case .json:
+            return try service.jsonExportData()
+        case .csv:
+            return service.csvExportData()
         }
     }
 }

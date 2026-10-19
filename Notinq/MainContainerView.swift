@@ -137,10 +137,30 @@ struct MainContainerView: View {
                                             appState.consumeStudyGenerationRequest()
                                         },
                                         onClose: { appState.selectedMode = .notes },
-                                        onExplainSimply: { insertStudyContentIntoCurrentNote(explainCurrentNoteSimply()) },
-                                        onGiveExample: { insertStudyContentIntoCurrentNote(explainCurrentNoteExample()) },
-                                        onCompareConcepts: { insertStudyContentIntoCurrentNote(explainCurrentNoteComparison()) },
-                                        onCreateAnalogy: { insertStudyContentIntoCurrentNote(explainCurrentNoteAnalogy()) },
+                                        onExplainSimply: {
+                                            requestStudyProposalForCurrentNote(
+                                                content: explainCurrentNoteSimply(),
+                                                feature: "Simple Explanation"
+                                            )
+                                        },
+                                        onGiveExample: {
+                                            requestStudyProposalForCurrentNote(
+                                                content: explainCurrentNoteExample(),
+                                                feature: "Concrete Example"
+                                            )
+                                        },
+                                        onCompareConcepts: {
+                                            requestStudyProposalForCurrentNote(
+                                                content: explainCurrentNoteComparison(),
+                                                feature: "Concept Comparison"
+                                            )
+                                        },
+                                        onCreateAnalogy: {
+                                            requestStudyProposalForCurrentNote(
+                                                content: explainCurrentNoteAnalogy(),
+                                                feature: "Analogy"
+                                            )
+                                        },
                                         onMarkFlashcardReviewed: { card in markFlashcardReviewed(card) },
                                         onRecordQuizAttempt: { quizSet, score, totalQuestions in
                                             recordQuizAttempt(quizSet: quizSet, score: score, totalQuestions: totalQuestions)
@@ -151,7 +171,7 @@ struct MainContainerView: View {
                                         onRecordTestMeSession: { score, totalQuestions, concepts in
                                             recordTestMeSession(score: score, totalQuestions: totalQuestions, concepts: concepts)
                                         },
-                                        onInsertContent: { text in insertStudyContentIntoCurrentNote(text) },
+                                        onInsertContent: { insertion in requestStudyProposalForCurrentNote(insertion) },
                                         panelWidth: $studyPanelWidth
                                     )
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -205,7 +225,10 @@ struct MainContainerView: View {
                                         appState.updateLearningInsights(result, for: currentNoteID)
                                     },
                                     onInsertIntoNote: { text in
-                                        insertStudyContentIntoCurrentNote(text)
+                                        requestStudyProposalForCurrentNote(
+                                            content: text,
+                                            feature: "Learning Insights"
+                                        )
                                     },
                                     onClose: {
                                         appState.closeLearningInsights()
@@ -308,20 +331,39 @@ struct MainContainerView: View {
         return appState.studyData(for: currentNoteID)
     }
 
-    private func insertStudyContentIntoCurrentNote(_ text: String) {
+    private func requestStudyProposalForCurrentNote(_ insertion: StudyGeneratedInsertion) {
+        requestStudyProposalForCurrentNote(
+            content: insertion.content,
+            feature: insertion.feature,
+            sourceConcept: insertion.sourceConcept,
+            sourceItemID: insertion.sourceItemID,
+            sourceItemTitle: insertion.sourceItemTitle,
+            sourceExcerpt: insertion.sourceExcerpt
+        )
+    }
+
+    private func requestStudyProposalForCurrentNote(
+        content: String,
+        feature: String,
+        sourceConcept: String? = nil,
+        sourceItemID: String? = nil,
+        sourceItemTitle: String? = nil,
+        sourceExcerpt: String? = nil
+    ) {
         guard let currentNoteID else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-
-        let existing = currentNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let updatedText: String
-        if existing.isEmpty {
-            updatedText = trimmed
-        } else {
-            updatedText = currentNoteText + "\n\n" + trimmed
-        }
-
-        appState.updateNoteContent(updatedText, for: currentNoteID)
+        appState.requestStudyProposal(
+            StudyProposalRequest(
+                noteID: currentNoteID,
+                content: trimmed,
+                feature: feature,
+                sourceConcept: sourceConcept ?? currentStudyConcepts(limit: 1).first,
+                sourceItemID: sourceItemID,
+                sourceItemTitle: sourceItemTitle,
+                sourceExcerpt: sourceExcerpt ?? String(currentNoteText.prefix(600))
+            )
+        )
     }
 
     private func currentStudyConcepts(limit: Int = 4) -> [String] {

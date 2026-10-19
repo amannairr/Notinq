@@ -539,7 +539,7 @@ struct LearningInsightsWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(previewMode.title)
                         .font(.headline)
-                    Text("This preview can be inserted into the note or turned into practice material.")
+                    Text("Turn this preview into a reviewed note proposal or practice material.")
                         .font(.subheadline)
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -759,7 +759,7 @@ struct LearningInsightsWorkspaceView: View {
                     controller.insertGeneratedPreview()
                 }
             } label: {
-                Label("Insert Into Note", systemImage: "square.and.arrow.down")
+                Label(LearningInsightsAction.insert.title, systemImage: "square.and.arrow.down")
             }
             .buttonStyle(.borderedProminent)
             .tint(Color(red: 0.31, green: 0.58, blue: 0.39))
@@ -870,7 +870,7 @@ struct LearningInsightsWorkspaceView: View {
             actionChip(title: "Create Quiz") {
                 generatePreview(for: concept, mode: .quiz)
             }
-            actionChip(title: "Insert Into Note") {
+            actionChip(title: LearningInsightsAction.insert.title) {
                 generatePreview(for: concept, mode: .explanation)
                 controller.insertGeneratedPreview()
             }

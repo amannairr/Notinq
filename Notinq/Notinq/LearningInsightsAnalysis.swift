@@ -154,7 +154,7 @@ enum LearningInsightsAction: String, CaseIterable, Identifiable {
         case .quiz:
             return "Create Quiz Questions"
         case .insert:
-            return "Insert Into Note"
+            return "Propose Add to Note"
         }
     }
 
@@ -169,7 +169,7 @@ enum LearningInsightsAction: String, CaseIterable, Identifiable {
         case .quiz:
             return "Create quiz questions"
         case .insert:
-            return "Insert generated content into note"
+            return "Create a proposal before adding generated content to the note"
         }
     }
 }
@@ -919,7 +919,7 @@ final class LearningInsightsWorkspaceModel: ObservableObject {
     func insertGeneratedPreview() {
         guard !generatedPreview.isEmpty, !isAnalyzing else { return }
         onInsertIntoNote(generatedPreview)
-        statusMessage = "Inserted the generated content into the note."
+        statusMessage = "Created a proposal to review before adding this to the note."
     }
 
     func currentPreviewIsAvailable() -> Bool {

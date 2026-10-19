@@ -95,6 +95,7 @@ final class AIProposalCoordinator {
         activeRequestID = requestID
         activeNoteID = noteID
         let sourceRange = selection.range
+        let generationStartedAt = Date()
         activeGenerationTask = generator.generate(
             action: action,
             selectedText: selection.text,
@@ -122,6 +123,12 @@ final class AIProposalCoordinator {
                 adaptiveExplanationContext: adaptiveContext
             )
             self.proposal = proposal
+            if let proposal {
+                ResearchInstrumentationService.shared.recordProposalGenerated(
+                    proposal: proposal,
+                    latency: Date().timeIntervalSince(generationStartedAt)
+                )
+            }
             self.state = proposal == nil ? .idle : .ready
             if proposal == nil {
                 self.activeRequestID = nil

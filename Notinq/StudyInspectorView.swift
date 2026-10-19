@@ -404,7 +404,7 @@ struct ConceptDetailSheet: View {
                 .font(.title3.weight(.bold))
             Button("Explain Concept", action: onExplain)
             Button("Generate Section", action: onGenerate)
-            Button("Insert Into Note", action: onInsert)
+            Button("Propose Add to Note", action: onInsert)
         }
         .padding(20)
         .frame(width: 320)

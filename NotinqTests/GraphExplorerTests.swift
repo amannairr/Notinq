@@ -73,7 +73,96 @@ final class GraphExplorerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(viewModel.bottlenecks.first?.centrality ?? 0, 3)
     }
 
-    private func makeViewModel(fixture: AdaptiveGraphTestFixture) -> KnowledgeGraphExplorerViewModel {
+    func testFilteringSupportsMasteryGapsConfidenceAndTextQuery() throws {
+        let fixture = try AdaptiveGraphTestFixture()
+        let graph = try fixture.seedATPGraph()
+        try fixture.studyRepository.upsertStudentConcept(
+            noteID: graph.noteID,
+            conceptID: graph.atpID,
+            masteryScore: 0.9,
+            confidenceScore: 0.9,
+            reviewCount: 3,
+            mistakeCount: 0,
+            lastReviewed: Date()
+        )
+        try fixture.studyRepository.upsertStudentConcept(
+            noteID: graph.noteID,
+            conceptID: graph.respirationID,
+            masteryScore: 0.2,
+            confidenceScore: 0.3,
+            reviewCount: 2,
+            mistakeCount: 2,
+            lastReviewed: nil
+        )
+        let viewModel = makeViewModel(fixture: fixture)
+
+        viewModel.selectConcept("ATP")
+        viewModel.filterState = GraphExplorerFilterState(
+            masteryStates: [.struggling],
+            gapStatuses: [.active],
+            minimumConfidence: 0,
+            textQuery: "respiration"
+        )
+
+        XCTAssertEqual(viewModel.filteredNodes.map(\.name), ["Cellular Respiration"])
+        XCTAssertTrue(viewModel.filteredEdges.allSatisfy { $0.confidence >= 0 })
+
+        viewModel.filterState.minimumConfidence = 0.95
+
+        XCTAssertTrue(viewModel.filteredEdges.isEmpty)
+    }
+
+    func testNodeProvenanceSummarizesSourceNoteAndExcerpt() throws {
+        let fixture = try AdaptiveGraphTestFixture()
+        _ = try fixture.seedATPGraph()
+        let viewModel = makeViewModel(fixture: fixture)
+
+        viewModel.selectConcept("ATP")
+
+        XCTAssertEqual(viewModel.selectedNode?.provenance.sourceCount, 1)
+        XCTAssertEqual(viewModel.selectedNode?.provenance.references.first?.title, "ATP Notes")
+        XCTAssertTrue(viewModel.selectedNode?.provenance.references.first?.excerpt.contains("ATP is produced") == true)
+    }
+
+    func testEdgeSelectionPublishesRelationshipDetailModel() throws {
+        let fixture = try AdaptiveGraphTestFixture()
+        _ = try fixture.seedATPGraph()
+        let viewModel = makeViewModel(fixture: fixture)
+
+        viewModel.selectConcept("ATP")
+        let edge = try XCTUnwrap(viewModel.edges.first)
+        viewModel.selectEdge(edge.id)
+
+        XCTAssertNil(viewModel.selectedNode)
+        XCTAssertEqual(viewModel.selectedEdge?.id, edge.id)
+        XCTAssertEqual(viewModel.selectedEdge?.relationshipType, edge.relationshipType)
+    }
+
+    func testViewportAndFiltersPersistAcrossViewModels() throws {
+        let suiteName = "GraphExplorerTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        let fixture = try AdaptiveGraphTestFixture()
+
+        let first = makeViewModel(fixture: fixture, userDefaults: defaults)
+        first.updateViewport(scale: 2.2, offsetX: 42, offsetY: -12)
+        first.filterState = GraphExplorerFilterState(
+            masteryStates: [.mastered, .familiar],
+            gapStatuses: [.resolved],
+            minimumConfidence: 0.65,
+            textQuery: "ATP"
+        )
+
+        let second = makeViewModel(fixture: fixture, userDefaults: defaults)
+
+        XCTAssertEqual(second.viewport, GraphExplorerViewport(offsetX: 42, offsetY: -12, scale: 2.2))
+        XCTAssertEqual(second.filterState, first.filterState)
+    }
+
+    private func makeViewModel(
+        fixture: AdaptiveGraphTestFixture,
+        userDefaults: UserDefaults = UserDefaults(suiteName: "GraphExplorerTests-\(UUID().uuidString)") ?? .standard
+    ) -> KnowledgeGraphExplorerViewModel {
         let studentConceptService = StudentConceptService(
             repository: StudentConceptRepository(studyRepository: fixture.studyRepository)
         )
@@ -85,7 +174,8 @@ final class GraphExplorerTests: XCTestCase {
                 repository: fixture.knowledgeRepository,
                 studentConceptService: studentConceptService
             ),
-            studentConceptService: studentConceptService
+            studentConceptService: studentConceptService,
+            userDefaults: userDefaults
         )
     }
 }

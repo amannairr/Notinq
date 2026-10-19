@@ -32,6 +32,7 @@ struct AITextView: NSViewRepresentable {
     var onCopy: (() -> Void)?
     var onStyleChange: ((TextStyleState) -> Void)?
     var onAIBlockFollowUp: ((AIBlockFollowUp, AIBlockSelection) -> Void)?
+    var onAIBlockSourceInfo: ((AIBlockSelection) -> Void)?
     
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = FillingScrollView()
@@ -280,10 +281,17 @@ struct AITextView: NSViewRepresentable {
             guard let block = bridge.aiBlockSelection(containing: cursor) else { return }
 
             let hosting = NSHostingView(
-                rootView: AIBlockInlineActionsView { followUp in
-                    self.parent.onAIBlockFollowUp?(followUp, block)
-                    self.hideAIBlockActions()
-                }
+                rootView: AIBlockInlineActionsView(
+                    hasSourceInfo: block.sourceInfo != nil,
+                    onSourceInfo: {
+                        self.parent.onAIBlockSourceInfo?(block)
+                        self.hideAIBlockActions()
+                    },
+                    onFollowUp: { followUp in
+                        self.parent.onAIBlockFollowUp?(followUp, block)
+                        self.hideAIBlockActions()
+                    }
+                )
             )
 
             hosting.layoutSubtreeIfNeeded()
@@ -370,11 +378,29 @@ struct AITextView: NSViewRepresentable {
 }
 
 struct AIBlockInlineActionsView: View {
-    let action: (AIBlockFollowUp) -> Void
+    let hasSourceInfo: Bool
+    let onSourceInfo: () -> Void
+    let onFollowUp: (AIBlockFollowUp) -> Void
     @State private var visible = false
 
     var body: some View {
         HStack(spacing: 4) {
+            Button("Source") {
+                onSourceInfo()
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(hasSourceInfo ? Color.textSecondary : Color.textSecondary.opacity(0.45))
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .disabled(!hasSourceInfo)
+
+            Divider()
+                .frame(height: 14)
+                .opacity(0.45)
+
             inlineButton(.regenerate)
             inlineButton(.shorter)
             inlineButton(.moreDetailed)
@@ -399,7 +425,7 @@ struct AIBlockInlineActionsView: View {
 
     private func inlineButton(_ followUp: AIBlockFollowUp) -> some View {
         Button(followUp.title) {
-            action(followUp)
+            onFollowUp(followUp)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundColor(Color.textSecondary)
@@ -412,6 +438,12 @@ struct AIBlockInlineActionsView: View {
 }
 
 final class AIBlockTextView: NSTextView {
+    private let localUndoManager = UndoManager()
+
+    override var undoManager: UndoManager? {
+        super.undoManager ?? localUndoManager
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawAIBlockBackgrounds()
         super.draw(dirtyRect)

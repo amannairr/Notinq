@@ -1,36 +1,5 @@
 import Foundation
 
-enum AIAction {
-    case summarize
-    case simplify
-    case rewrite
-    case explain
-    case add
-    case ask
-
-    var title: String {
-        switch self {
-        case .summarize: return "Summary"
-        case .simplify: return "Simplify"
-        case .rewrite: return "Rewrite"
-        case .explain: return "Explanation"
-        case .add: return "Addition"
-        case .ask: return "Ask AI"
-        }
-    }
-
-    var blockTitle: String {
-        switch self {
-        case .summarize: return "Summary"
-        case .simplify: return "Simplify"
-        case .rewrite: return "Rewrite"
-        case .explain: return "Explain"
-        case .add: return "Continue"
-        case .ask: return "Ask AI"
-        }
-    }
-}
-
 enum AIRequestKind {
     case summarize
     case simplify
@@ -173,31 +142,6 @@ final class AIService {
         inferenceEngine.cancel()
     }
 
-    func directEdit(
-        action: AIAction,
-        selectedText: String,
-        noteContext: String,
-        noteID: UUID? = nil,
-        completion: @escaping (String) -> Void
-    ) {
-        Task {
-            let query = [
-                action.promptInstruction(),
-                selectedText,
-                String(noteContext.prefix(1_200))
-            ].joined(separator: "\n\n")
-            let response = await adaptiveTextResponse(
-                question: query,
-                noteID: noteID,
-                requestKind: "adaptiveDirectEdit",
-                maxTokens: AIRequestKind.explain.maxTokens
-            )
-            await MainActor.run {
-                completion(response)
-            }
-        }
-    }
-
     @discardableResult
     func editorProposal(
         action: AIEditorAction,
@@ -270,32 +214,6 @@ final class AIService {
             noteContext: noteContext,
             adaptiveContext: adaptiveContext
         )
-    }
-
-    func streamFollowUp(
-        noteContext: String,
-        followUpTitle: String,
-        blockContent: String,
-        onToken: @escaping (String) -> Void,
-        completion: @escaping () -> Void
-    ) {
-        Task {
-            let query = [
-                "\(followUpTitle) the following generated passage while preserving the note's context.",
-                blockContent,
-                String(noteContext.prefix(1_200))
-            ].joined(separator: "\n\n")
-            let request = await adaptiveRequest(
-                question: query,
-                noteID: nil,
-                requestKind: "adaptiveFollowUp",
-                maxTokens: AIRequestKind.followUp.maxTokens
-            )
-            _ = try? await inferenceEngine.stream(request, onToken: onToken)
-            await MainActor.run {
-                completion()
-            }
-        }
     }
 
     func chat(noteTitle: String, noteText: String, userRequest: String, completion: @escaping (String) -> Void) {
@@ -441,6 +359,20 @@ final class AIService {
         return await generateStudyData(from: structure, notebookText: notebookText, existingStudyData: NoteStudyData())
     }
 
+    func generateStudyQuestion(
+        action: StudyQuestionGenerationAction,
+        source: StudyQuestionGenerationSource
+    ) async -> StudyQuestionGenerationOutput {
+        let prompt = Self.studyQuestionPrompt(action: action, source: source)
+        let response = await adaptiveTextResponse(
+            question: prompt,
+            noteID: source.noteID,
+            requestKind: "studyQuestion.\(action.rawValue)",
+            maxTokens: action == .generateFlashcard ? AIRequestKind.flashcards.maxTokens : AIRequestKind.studyQuiz.maxTokens
+        )
+        return Self.parseStudyQuestionResponse(response, action: action, source: source)
+    }
+
     private func truncate(_ text: String, limit: Int) -> String {
         guard text.count > limit else { return text }
         return String(text.prefix(limit)) + "\n[Context truncated]"
@@ -568,6 +500,143 @@ final class AIService {
         }
     }
 
+    static func studyQuestionPrompt(action: StudyQuestionGenerationAction, source: StudyQuestionGenerationSource) -> String {
+        let task: String
+        switch action {
+        case .generateFlashcard:
+            task = "Create one flashcard with a front prompt and a concise back answer."
+        case .recallQuestion:
+            task = "Create one recall question that checks whether the student remembers the selected content."
+        case .understandingQuestion:
+            task = "Create one conceptual understanding question that asks why or how the selected content works."
+        case .applicationQuestion:
+            task = "Create one application question that asks the student to use the selected content in a new situation."
+        }
+
+        return [
+            "Generate one study item from the student's selected note content.",
+            "",
+            "SELECTED CONTENT",
+            source.selectedText,
+            "",
+            "SURROUNDING NOTE CONTEXT",
+            String(source.noteContext.prefix(2_400)),
+            "",
+            "TASK",
+            task,
+            "",
+            "Return compact JSON only:",
+            "{\"question\":\"...\",\"answer\":\"...\",\"concept\":\"...\",\"explanation\":\"...\"}",
+            "",
+            "Rules:",
+            "- Do not invent facts outside the supplied note context.",
+            "- Keep the item short enough for quick studying.",
+            "- The concept should be the main source concept tested by the item."
+        ].joined(separator: "\n")
+    }
+
+    static func parseStudyQuestionResponse(
+        _ response: String,
+        action: StudyQuestionGenerationAction,
+        source: StudyQuestionGenerationSource
+    ) -> StudyQuestionGenerationOutput {
+        let payload = jsonObject(from: response)
+        let questionText = payload?["question"] as? String
+        let answerText = payload?["answer"] as? String
+        let concept = (payload?["concept"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explanation = (payload?["explanation"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let fallbackConcept = concept?.isEmpty == false ? concept! : inferredConcept(from: source.selectedText)
+        let reference = StudyQuestionSourceReference(
+            noteID: source.noteID,
+            range: source.sourceRange,
+            excerpt: source.sourceExcerpt
+        )
+        let answer = answerText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? answerText!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : String(source.selectedText.prefix(220))
+        let question = questionText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? questionText!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : fallbackQuestion(for: action, concept: fallbackConcept)
+
+        switch action {
+        case .generateFlashcard:
+            return StudyQuestionGenerationOutput(
+                flashcard: StudyFlashcard(
+                    type: .questionAnswer,
+                    front: question,
+                    back: answer,
+                    whyItMatters: explanation,
+                    conceptIDs: [fallbackConcept],
+                    sourceConcept: fallbackConcept,
+                    cognitiveLevel: .recall,
+                    sourceReferences: [reference],
+                    generationAction: action
+                ),
+                question: nil
+            )
+        case .recallQuestion, .understandingQuestion, .applicationQuestion:
+            let type: StudyQuizQuestionType
+            let level: StudyQuestionCognitiveLevel
+            switch action {
+            case .generateFlashcard:
+                type = .shortAnswer
+                level = .recall
+            case .recallQuestion:
+                type = .shortAnswer
+                level = .recall
+            case .understandingQuestion:
+                type = .conceptualUnderstanding
+                level = .understanding
+            case .applicationQuestion:
+                type = .application
+                level = .application
+            }
+            return StudyQuestionGenerationOutput(
+                flashcard: nil,
+                question: StudyQuizQuestion(
+                    type: type,
+                    prompt: question,
+                    correctAnswer: answer,
+                    explanation: explanation,
+                    keywords: [fallbackConcept],
+                    conceptIDs: [fallbackConcept],
+                    sourceConcept: fallbackConcept,
+                    cognitiveLevel: level,
+                    sourceReferences: [reference],
+                    generationAction: action
+                )
+            )
+        }
+    }
+
+    private static func jsonObject(from response: String) -> [String: Any]? {
+        guard
+            let start = response.firstIndex(of: "{"),
+            let end = response.lastIndex(of: "}")
+        else { return nil }
+        let json = String(response[start...end])
+        guard let data = json.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    private static func inferredConcept(from text: String) -> String {
+        let words = text
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 2 }
+        return words.prefix(3).joined(separator: " ").isEmpty ? "Selected Concept" : words.prefix(3).joined(separator: " ")
+    }
+
+    private static func fallbackQuestion(for action: StudyQuestionGenerationAction, concept: String) -> String {
+        switch action {
+        case .generateFlashcard, .recallQuestion:
+            return "What should you remember about \(concept)?"
+        case .understandingQuestion:
+            return "Why does \(concept) matter in this note?"
+        case .applicationQuestion:
+            return "How would you apply \(concept) in a new example?"
+        }
+    }
+
     private static func conceptNameByID(from context: AdaptiveTutorContext) -> [String: String] {
         var names: [String: String] = [:]
         let concepts = context.weakConcepts
@@ -639,25 +708,6 @@ final class AIService {
             byConcept[entry.concept] = entry
         }
         return byConcept.values.sorted { $0.concept.localizedCaseInsensitiveCompare($1.concept) == .orderedAscending }
-    }
-}
-
-private extension AIAction {
-    func promptInstruction() -> String {
-        switch self {
-        case .summarize:
-            return "Summarize the selected text into a study-ready overview."
-        case .simplify:
-            return "Rewrite the selected text in simpler language without losing meaning."
-        case .rewrite:
-            return "Rewrite the selected text for clarity and flow while preserving every fact."
-        case .explain:
-            return "Explain the selected text in plain language. Include prerequisite concepts and weak areas when the adaptive context identifies them."
-        case .add:
-            return "Continue the selected text naturally with a few helpful sentences."
-        case .ask:
-            return "Answer the user's question using the note context."
-        }
     }
 }
 
